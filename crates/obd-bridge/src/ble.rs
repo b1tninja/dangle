@@ -30,6 +30,7 @@ use windows::core::GUID;
 
 use crate::BridgeResult;
 use crate::config::Config;
+use crate::link::{SerialLink, write_chunked};
 
 /// Format a 48-bit Bluetooth address as `AA:BB:CC:DD:EE:FF` for logging.
 #[must_use]
@@ -288,14 +289,14 @@ pub fn connect(cfg: &Config, address: u64) -> BridgeResult<(BleSerial, Receiver<
     ))
 }
 
-impl BleSerial {
+impl SerialLink for BleSerial {
     /// Write `data` to the adapter, split into MTU-sized GATT writes.
     ///
     /// # Errors
     /// Returns an error if any GATT write does not complete successfully (typically the adapter
     /// disconnected), which the caller treats as a signal to reconnect.
-    pub fn write(&self, data: &[u8]) -> BridgeResult<()> {
-        for chunk in data.chunks(self.max_write) {
+    fn write(&self, data: &[u8]) -> BridgeResult<()> {
+        write_chunked(self.max_write, data, |chunk| {
             let writer = DataWriter::new()?;
             writer.WriteBytes(chunk)?;
             let buffer = writer.DetachBuffer()?;
@@ -306,8 +307,8 @@ impl BleSerial {
             if status != GattCommunicationStatus::Success {
                 return Err(format!("GATT write failed (status {status:?})").into());
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 

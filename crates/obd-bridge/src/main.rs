@@ -6,12 +6,16 @@
 //! client and the adapter's BLE serial characteristics. It performs no OBD/UDS logic and issues no
 //! vehicle writes of its own.
 
+// The relay and link trait are platform-independent (and tested everywhere); only the Windows
+// build has a backend that uses them outside tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod bridge;
 mod config;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod link;
 
 #[cfg(windows)]
 mod ble;
-#[cfg(windows)]
-mod bridge;
 
 use std::process::ExitCode;
 

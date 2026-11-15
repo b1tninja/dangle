@@ -12,8 +12,13 @@ member lives in `crates/<name>/` and inherits both with `workspace = true`, mirr
   - `src/config.rs` — configuration parsing (args + environment), UUID/address parsing, and the
     unit tests. Platform-independent, so the tests run anywhere.
   - `src/ble.rs` — the WinRT Bluetooth LE backend: scan, connect, service/characteristic discovery,
-    notification subscription, and chunked writes. Windows-only.
-  - `src/bridge.rs` — the byte pipe: two directions relayed inside a `std::thread::scope`.
+    notification subscription, and `BleSerial` (the `SerialLink` implementation). Windows-only.
+  - `src/link.rs` — the `SerialLink` trait (the write half of a serial link; notifications stay a
+    `Receiver<Vec<u8>>`) and `write_chunked`, the MTU-splitting rule shared by the BLE backend and
+    the test mock. Platform-independent.
+  - `src/bridge.rs` — the byte pipe: two directions relayed inside a `std::thread::scope`, generic
+    over `SerialLink`. Platform-independent; its tests drive it with an in-memory mock link and real
+    loopback TCP, so the relay and error/reconnect contract are checked without a radio.
 
 ## Dependencies
 

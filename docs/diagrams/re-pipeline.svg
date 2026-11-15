@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 700" font-family="'Segoe UI',system-ui,sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#5a6672"/>
+    </marker>
+  </defs>
+  <style>
+    text{fill:#1f2a37}
+    .t{font-size:13px}
+    .b{font-weight:600}
+    .lbl{font-size:11px;fill:#5a6672}
+    .arrow{stroke:#5a6672;stroke-width:1.6;fill:none;marker-end:url(#arr)}
+  </style>
+  <rect x="0" y="0" width="720" height="700" fill="#ffffff"/>
+  <text x="360" y="28" text-anchor="middle" class="b" font-size="16">OBDLink APK → BLE GATT profile (static RE)</text>
+
+  <!-- Row 1 -->
+  <rect x="235" y="48" width="250" height="48" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
+  <text x="360" y="68" text-anchor="middle" class="t b">Pixel phone</text>
+  <text x="360" y="85" text-anchor="middle" class="lbl">OBDLink app installed (not run)</text>
+
+  <path class="arrow" d="M360,96 L360,128"/>
+  <text x="372" y="117" class="lbl">adb pull base + arm64 split</text>
+
+  <!-- Row 2 -->
+  <rect x="235" y="130" width="250" height="44" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
+  <text x="360" y="157" text-anchor="middle" class="t b">APK splits</text>
+
+  <path class="arrow" d="M360,174 L360,206"/>
+  <text x="372" y="195" class="lbl">unzip</text>
+
+  <!-- Row 3 -->
+  <rect x="210" y="208" width="300" height="48" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
+  <text x="360" y="228" text-anchor="middle" class="t b">lib/arm64-v8a/libassembly-store.so</text>
+  <text x="360" y="245" text-anchor="middle" class="lbl">.NET MAUI AssemblyStore</text>
+
+  <path class="arrow" d="M360,256 L360,288"/>
+
+  <!-- Row 4: store split -->
+  <rect x="235" y="290" width="250" height="40" rx="8" fill="#fdf1e3" stroke="#b5792e" stroke-width="1.5"/>
+  <text x="360" y="315" text-anchor="middle" class="t b">AssemblyStore entries</text>
+
+  <!-- branch lines -->
+  <path class="arrow" d="M300,330 L185,372"/>
+  <path class="arrow" d="M420,330 L535,372"/>
+
+  <!-- Row 5 left: BSJB -->
+  <rect x="55" y="374" width="270" height="56" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
+  <text x="190" y="396" text-anchor="middle" class="t b">205 × plain (BSJB)</text>
+  <text x="190" y="414" text-anchor="middle" class="lbl">metadata; UTF-16LE #US strings</text>
+
+  <!-- Row 5 right: XALZ -->
+  <rect x="395" y="374" width="270" height="56" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
+  <text x="530" y="396" text-anchor="middle" class="t b">185 × XALZ (LZ4)</text>
+  <text x="530" y="414" text-anchor="middle" class="lbl">pure-Python LZ4 decompress</text>
+
+  <path class="arrow" d="M530,430 L530,468"/>
+  <text x="542" y="453" class="lbl">managed bytes</text>
+
+  <!-- Row 6: extract strings (merge) -->
+  <path class="arrow" d="M190,430 L190,500 L300,500"/>
+  <rect x="300" y="470" width="300" height="56" rx="8" fill="#eaf6ec" stroke="#4a8a5a" stroke-width="1.5"/>
+  <text x="450" y="492" text-anchor="middle" class="t b">Extract ASCII + UTF-16LE strings</text>
+  <text x="450" y="510" text-anchor="middle" class="lbl">from decompressed + plain assemblies</text>
+
+  <path class="arrow" d="M450,526 L450,558"/>
+  <text x="462" y="547" class="lbl">grep UUIDs + BLE identifiers</text>
+
+  <!-- Row 7: result -->
+  <rect x="190" y="560" width="520" height="0" />
+  <rect x="140" y="560" width="440" height="96" rx="8" fill="#eaf6ec" stroke="#4a8a5a" stroke-width="1.5"/>
+  <text x="360" y="584" text-anchor="middle" class="t b">GATT serial profile</text>
+  <text x="360" y="606" text-anchor="middle" class="t">service 0xFFF0 · chars 0xFFF1 / 0xFFF2</text>
+  <text x="360" y="626" text-anchor="middle" class="lbl">DiscoveredTxCharacteristic / DiscoveredRxCharacteristic</text>
+  <text x="360" y="644" text-anchor="middle" class="lbl">→ write &amp; notify chosen by GATT property</text>
+</svg>

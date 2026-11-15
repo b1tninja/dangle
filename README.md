@@ -84,9 +84,14 @@ This matches the OBDLink-class BLE serial profile; see [`docs/ble-re.md`](docs/b
 was recovered and for notes on other adapters (e.g. Nordic-UART clones), which the `--service` /
 `--write` / `--notify` overrides accommodate.
 
-## Layout
+## Documentation
 
-A Cargo workspace; the bridge binary is in `crates/obd-bridge/`. See [`docs/layout.md`](docs/layout.md).
+- [`docs/architecture.md`](docs/architecture.md) — how the bridge works and how the BLE profile was
+  recovered, with diagrams (Mermaid inline + SVG under `docs/diagrams/`).
+- [`docs/ble-re.md`](docs/ble-re.md) — the full reverse-engineering write-up and GATT table.
+- [`docs/layout.md`](docs/layout.md) — crate/module layout and dependency rationale.
+
+A Cargo workspace; the bridge binary is in `crates/obd-bridge/`.
 
 ## Licence
 

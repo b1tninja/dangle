@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 650" font-family="'Segoe UI',system-ui,sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#3a4350"/>
+    </marker>
+  </defs>
+  <style>
+    text{fill:#1f2a37}
+    .t{font-size:12px}.b{font-weight:600}
+    .lbl{font-size:11px;fill:#3a4350}
+    .life{stroke:#9aa7b4;stroke-width:1.2}
+    .msg{stroke:#3a4350;stroke-width:1.5;fill:none;marker-end:url(#arr)}
+    .ret{stroke:#3a4350;stroke-width:1.3;fill:none;marker-end:url(#arr);stroke-dasharray:5 3}
+    .region{stroke:#9aa7b4;stroke-width:1;fill-opacity:1}
+  </style>
+  <rect x="0" y="0" width="900" height="650" fill="#ffffff"/>
+  <text x="450" y="26" text-anchor="middle" class="b" font-size="16">Connect &amp; relay sequence</text>
+
+  <!-- regions -->
+  <rect class="region" x="60" y="92" width="800" height="250" rx="6" fill="#eef4fa"/>
+  <text x="72" y="108" class="lbl b">outer loop — establish adapter</text>
+  <rect class="region" x="60" y="356" width="800" height="236" rx="6" fill="#eaf6ec"/>
+  <text x="72" y="372" class="lbl b">inner loop — serve a client</text>
+
+  <!-- lifelines -->
+  <g>
+    <rect x="70" y="44" width="140" height="36" rx="6" fill="#ffffff" stroke="#4a6b8a" stroke-width="1.5"/>
+    <text x="140" y="67" text-anchor="middle" class="t b">main (run)</text>
+    <line class="life" x1="140" y1="80" x2="140" y2="600"/>
+
+    <rect x="270" y="44" width="140" height="36" rx="6" fill="#ffffff" stroke="#4a6b8a" stroke-width="1.5"/>
+    <text x="340" y="67" text-anchor="middle" class="t b">ble module</text>
+    <line class="life" x1="340" y1="80" x2="340" y2="600"/>
+
+    <rect x="490" y="44" width="170" height="36" rx="6" fill="#ffffff" stroke="#4a6b8a" stroke-width="1.5"/>
+    <text x="575" y="67" text-anchor="middle" class="t b">WinRT / adapter</text>
+    <line class="life" x1="575" y1="80" x2="575" y2="600"/>
+
+    <rect x="730" y="44" width="130" height="36" rx="6" fill="#ffffff" stroke="#4a6b8a" stroke-width="1.5"/>
+    <text x="795" y="67" text-anchor="middle" class="t b">TCP client</text>
+    <line class="life" x1="795" y1="80" x2="795" y2="600"/>
+  </g>
+
+  <!-- outer messages -->
+  <text x="142" y="130" class="lbl">scan_for_adapter(cfg)</text>
+  <path class="msg" d="M140,134 L338,134"/>
+  <text x="342" y="158" class="lbl">AdvertisementWatcher (name/MAC filter)</text>
+  <path class="msg" d="M340,162 L573,162"/>
+  <text x="573" y="186" text-anchor="end" class="lbl">Bluetooth address</text>
+  <path class="ret" d="M575,190 L342,190"/>
+
+  <text x="142" y="214" class="lbl">connect(cfg, address)</text>
+  <path class="msg" d="M140,218 L338,218"/>
+  <text x="342" y="242" class="lbl">FromBluetoothAddress → GetGattServicesForUuid(0xFFF0)</text>
+  <path class="msg" d="M340,246 L573,246"/>
+  <text x="342" y="270" class="lbl">GetCharacteristics → pick write/notify by property</text>
+  <path class="msg" d="M340,274 L573,274"/>
+  <text x="342" y="298" class="lbl">subscribe Notify + ValueChanged handler</text>
+  <path class="msg" d="M340,302 L573,302"/>
+  <text x="573" y="326" text-anchor="end" class="lbl">(BleSerial, notify Receiver)</text>
+  <path class="ret" d="M575,330 L142,330"/>
+
+  <!-- inner messages -->
+  <text x="793" y="396" text-anchor="end" class="lbl">TCP connect</text>
+  <path class="msg" d="M795,400 L142,400"/>
+
+  <!-- loop frame -->
+  <rect x="96" y="414" width="720" height="150" rx="4" fill="none" stroke="#4a8a5a" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <rect x="96" y="414" width="150" height="20" fill="#4a8a5a"/>
+  <text x="104" y="429" class="lbl" fill="#ffffff">loop: until disconnect / BLE error</text>
+
+  <text x="793" y="456" text-anchor="end" class="lbl">command bytes (ATSP6\r …)</text>
+  <path class="msg" d="M795,460 L142,460"/>
+  <text x="142" y="484" class="lbl">write characteristic (chunked to MTU)</text>
+  <path class="msg" d="M140,488 L573,488"/>
+  <text x="573" y="512" text-anchor="end" class="lbl">notify chunks</text>
+  <path class="ret" d="M575,516 L142,516"/>
+  <text x="142" y="540" class="lbl">response bytes (… &gt;)</text>
+  <path class="msg" d="M140,544 L793,544"/>
+
+  <!-- outcome note -->
+  <rect x="60" y="604" width="800" height="38" rx="6" fill="#fdf1e3" stroke="#b5792e" stroke-width="1.2"/>
+  <text x="76" y="621" class="lbl"><tspan class="b">BLE write fails</tspan> → drop adapter, back to outer loop (reconnect).</text>
+  <text x="76" y="636" class="lbl"><tspan class="b">client closes</tspan> → keep adapter connected, accept the next client.</text>
+</svg>

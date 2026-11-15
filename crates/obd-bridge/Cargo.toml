@@ -1,0 +1,28 @@
+[package]
+name = "obd-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Host-side bridge that republishes a Bluetooth LE ELM327/STN OBD adapter as an ELM327-over-TCP server"
+readme = "../../README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Windows BLE/GATT access through Microsoft's first-party `windows` crate (WinRT projections for
+# Windows.Devices.Bluetooth). No third-party BLE stack (no btleplug) and no async runtime: the WinRT
+# async operations are driven synchronously with IAsyncOperation::get() on worker threads, and the
+# byte pipe is plain std::net + std::thread. See docs/layout.md for why each WinRT feature is enabled.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Devices_Bluetooth",
+    "Devices_Bluetooth_Advertisement",
+    "Devices_Bluetooth_GenericAttributeProfile",
+    "Storage_Streams",
+]

@@ -58,20 +58,29 @@ A UUID may be a 4-hex short form (`FFF0`) or a full 128-bit UUID
 (`0000fff0-0000-1000-8000-00805f9b34fb`). A Bluetooth address is 12 hex digits, separators optional.
 
 By default the bridge binds **loopback only** (`127.0.0.1`), so the adapter is not exposed to the
-network until you choose a different `--listen` address.
+network until you choose a different `--listen` address. From the standard Android emulator that
+socket is `10.0.2.2` on the same port: that name is the emulator's alias for the host's IPv4
+loopback. The bridge rejects `--listen 10.0.2.2:<port>` and tells you to bind `127.0.0.1` instead.
 
 ### Example: drive a BLE adapter from an Android emulator
 
 1. Pair the BLE adapter with Windows (or at least have it powered and advertising).
-2. Start the bridge, filtering to your adapter by name and listening where the emulator can reach it:
+2. Start the bridge on the default loopback socket, filtering to your adapter by name:
 
    ```
-   obd-bridge --name "OBDLink" --listen 10.0.2.2:35000
+   obd-bridge --name "OBDLink"
    ```
 
-   `10.0.2.2` is the host as seen from the standard Android emulator; adjust for your networking.
-3. In the OBD app running in the emulator, choose a **Wi-Fi / network** adapter (not Bluetooth) and
-   set the host and port to the bridge's `--listen` address.
+   It prints the bind address (`127.0.0.1:35000`) and the Wi-Fi host and port to type into the emulator.
+3. In the OBD app running in the emulator, choose a **Wi-Fi / network** adapter (not Bluetooth).
+   Set the host to `10.0.2.2` and the port to the printed port (`35000` unless you changed it).
+   When the emulator cannot open `10.0.2.2`, forward the port and use the emulator's own loopback:
+
+   ```
+   adb -s emulator-<digits> reverse tcp:35000 tcp:35000
+   ```
+
+   The serial is `emulator-` followed by digits. Then set the host to `127.0.0.1` and the same port.
 4. The app's `AT`/OBD traffic now flows to the real BLE dongle.
 
 The bridge serves one TCP client at a time. If the BLE link drops it reconnects automatically; if a

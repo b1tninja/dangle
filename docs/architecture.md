@@ -17,6 +17,12 @@ cannot talk to such an adapter directly. `obd-bridge` sits in the middle: it own
 on the host and re-exposes the adapter's serial stream as an **ELM327-over-TCP** server, so the
 adapter looks like a Wi-Fi OBD dongle.
 
+The bridge binds the host address (loopback `127.0.0.1:35000` by default). Inside the standard
+Android emulator that IPv4 loopback is named `10.0.2.2`, so the app's Wi-Fi host is `10.0.2.2` and
+the port is the bound port. `10.0.2.2` is rejected as a `--listen` address. When the emulator
+cannot open it, `adb -s emulator-<digits> reverse tcp:<port> tcp:<port>` makes the emulator's
+`127.0.0.1:<port>` reach the host socket, and the app uses host `127.0.0.1`.
+
 It is a **transport bridge only**. It relays raw ASCII bytes (ELM327 `AT` command lines terminated
 by `\r`, responses ending at the `>` prompt) and performs no OBD/UDS parsing and no vehicle writes.
 This is roadmap item A1 in the `volt` repo's `docs/OBD-CONFIG-ROADMAP.md`.

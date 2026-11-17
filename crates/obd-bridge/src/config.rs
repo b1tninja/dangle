@@ -3,7 +3,7 @@
 //! Every option has an environment-variable fallback so the bridge can be configured either way;
 //! an explicit command-line flag wins over the environment. See [`Config::from_args_and_env`].
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 /// The Bluetooth SIG base UUID `00000000-0000-1000-8000-00805F9B34FB`, into which a 16-bit
@@ -23,7 +23,17 @@ pub const DEFAULT_SERVICE_UUID: u128 = short_uuid(0xFFF0);
 
 /// Default TCP endpoint the bridge listens on. Loopback-only by default so the republished
 /// adapter is not exposed to the network without a deliberate choice.
+///
+/// The standard Android emulator reaches this socket as [`EMULATOR_HOST`] on the same port.
+/// That address is the emulator's name for the host's IPv4 loopback; it is not a bind address.
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:35000";
+
+/// IPv4 address the standard Android emulator uses to reach the host's loopback
+/// (`127.0.0.1` on the machine running the bridge).
+///
+/// The address is assigned inside the emulator's network. The bridge binds a host address
+/// (by default [`DEFAULT_LISTEN`]) and the emulator's Wi-Fi client dials this alias.
+pub const EMULATOR_HOST: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
 
 /// Default maximum number of payload bytes written to the adapter in a single GATT write.
 /// 20 bytes is the safe ATT payload for the default 23-byte MTU; raise it only if the adapter
@@ -121,6 +131,54 @@ pub fn parse_mac(s: &str) -> Result<u64, ConfigError> {
         .map_err(|_| ConfigError(format!("invalid Bluetooth address: {s:?}")))
 }
 
+/// Host and port an Android emulator's Wi-Fi OBD client should dial to reach `bound`.
+///
+/// Returns `Some` when `bound` is `127.0.0.1` or IPv4 `0.0.0.0`. The emulator forwards
+/// [`EMULATOR_HOST`] to the host's `127.0.0.1`, and both of those sockets accept that
+/// connection. The port is the port the bridge actually bound.
+///
+/// Returns `None` for every other address, including the rest of `127.0.0.0/8` and any
+/// IPv6 address. [`EMULATOR_HOST`] is forwarded only to `127.0.0.1`; for any other bind
+/// address the client uses `bound` itself.
+#[must_use]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn emulator_wifi_target(bound: SocketAddr) -> Option<(String, u16)> {
+    let reachable = match bound.ip() {
+        IpAddr::V4(ip) => ip == Ipv4Addr::LOCALHOST || ip.is_unspecified(),
+        IpAddr::V6(_) => false,
+    };
+    if reachable {
+        Some((EMULATOR_HOST.to_string(), bound.port()))
+    } else {
+        None
+    }
+}
+
+/// Text to print once the TCP socket is bound.
+///
+/// The first line is the host bind address. When [`emulator_wifi_target`] applies, the
+/// following lines are the Wi-Fi host and port to enter in the emulator, plus the
+/// `adb reverse` fallback the emulator uses when `10.0.2.2` is not reachable (the app
+/// then dials `127.0.0.1` on the same port). Otherwise the lines say the client uses
+/// `bound` itself.
+#[must_use]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn listen_notice(bound: SocketAddr) -> String {
+    match emulator_wifi_target(bound) {
+        Some((host, port)) => format!(
+            "listening on {bound}\n\
+             emulator Wi-Fi adapter: host {host} port {port}\n\
+             {EMULATOR_HOST} is the emulator's name for this host's IPv4 loopback\n\
+             if the emulator cannot open {host}: adb -s emulator-<digits> reverse tcp:{port} tcp:{port}, then use host 127.0.0.1"
+        ),
+        None => format!(
+            "listening on {bound}\n\
+             Wi-Fi client host:port is {bound}\n\
+             the emulator alias {EMULATOR_HOST} reaches 127.0.0.1 only"
+        ),
+    }
+}
+
 fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
 }
@@ -131,7 +189,8 @@ impl Config {
     /// Returns `Ok(None)` when `--help` was requested (the caller should print [`USAGE`] and exit 0).
     ///
     /// # Errors
-    /// Returns [`ConfigError`] for an unknown flag, a missing value, or an unparseable value.
+    /// Returns [`ConfigError`] for an unknown flag, a missing value, an unparseable value,
+    /// or a `--listen` address equal to [`EMULATOR_HOST`].
     pub fn from_args_and_env<I>(args: I) -> Result<Option<Self>, ConfigError>
     where
         I: IntoIterator<Item = String>,
@@ -168,6 +227,13 @@ impl Config {
         let listen: SocketAddr = listen
             .parse()
             .map_err(|e| ConfigError(format!("invalid --listen {listen:?}: {e}")))?;
+        if listen.ip() == IpAddr::V4(EMULATOR_HOST) {
+            let port = listen.port();
+            return Err(ConfigError(format!(
+                "{listen} is the Android emulator's name for this host's IPv4 loopback. \
+                 Bind 127.0.0.1:{port} and set the emulator's Wi-Fi host to {EMULATOR_HOST} port {port}"
+            )));
+        }
         let mac_filter = match mac {
             Some(m) => Some(parse_mac(&m)?),
             None => None,
@@ -281,5 +347,47 @@ mod tests {
     fn unknown_flag_errors() {
         let args = ["--nope"].into_iter().map(String::from);
         assert!(Config::from_args_and_env(args).is_err());
+    }
+
+    #[test]
+    fn ipv4_loopback_and_wildcard_are_dialed_as_the_emulator_alias() {
+        for text in ["127.0.0.1:35000", "127.0.0.1:9", "0.0.0.0:35000"] {
+            let addr: SocketAddr = text.parse().unwrap();
+            assert_eq!(
+                emulator_wifi_target(addr),
+                Some((EMULATOR_HOST.to_string(), addr.port()))
+            );
+            let notice = listen_notice(addr);
+            assert!(notice.starts_with(&format!("listening on {addr}\n")));
+            assert!(notice.contains(&format!(
+                "emulator Wi-Fi adapter: host {EMULATOR_HOST} port {}",
+                addr.port()
+            )));
+            assert!(notice.contains(&format!(
+                "adb -s emulator-<digits> reverse tcp:{} tcp:{}",
+                addr.port(),
+                addr.port()
+            )));
+        }
+    }
+
+    #[test]
+    fn other_binds_are_not_the_emulator_alias() {
+        for text in ["127.0.0.2:35000", "[::1]:35000", "192.0.2.1:35000"] {
+            let addr: SocketAddr = text.parse().unwrap();
+            assert_eq!(emulator_wifi_target(addr), None);
+            let notice = listen_notice(addr);
+            assert!(notice.contains(&format!("Wi-Fi client host:port is {addr}")));
+            assert!(!notice.contains("emulator Wi-Fi adapter:"));
+        }
+    }
+
+    #[test]
+    fn emulator_alias_is_refused_as_a_bind_address() {
+        let args = ["--listen", "10.0.2.2:35000"].into_iter().map(String::from);
+        let text = Config::from_args_and_env(args).unwrap_err().to_string();
+        assert!(text.contains("10.0.2.2:35000"), "{text}");
+        assert!(text.contains("127.0.0.1:35000"), "{text}");
+        assert!(text.contains("Wi-Fi host to 10.0.2.2 port 35000"), "{text}");
     }
 }

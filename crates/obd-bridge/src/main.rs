@@ -50,10 +50,10 @@ fn run() -> BridgeResult<()> {
     };
 
     let listener = TcpListener::bind(cfg.listen)?;
-    eprintln!(
-        "obd-bridge: listening on {} (point the adapter app's Wi-Fi host:port here)",
-        cfg.listen
-    );
+    let bound = listener.local_addr()?;
+    for line in config::listen_notice(bound).lines() {
+        eprintln!("obd-bridge: {line}");
+    }
 
     // Outer loop: (re)connect the BLE adapter.
     loop {

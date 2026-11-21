@@ -102,6 +102,13 @@ and one notification in pcap and for one notification in btsnoop) and a round tr
 pcap reader in the test module. The relay is shown unchanged with the tap on and with a failing tap
 in `bridge.rs`.
 
-Unverified: no file was opened in Wireshark or another dissector, and no real adapter was used. The
-btsnoop layout rests on Wireshark's reader source, not on a Bluetooth clause. Whether Wireshark shows the synthesized attributes usefully (it has no
-discovery to name the handles) is not confirmed.
+Checked with Wireshark's `tshark`: a pcap and a btsnoop file, each holding one write and one
+notification written by the tap, open without malformed-packet warnings. The dissector chain is
+`bluetooth:hci_h4:bthci_acl:btl2cap:btatt`. Directions show as Sent and Rcvd; the connection handle,
+the packet boundary and broadcast flags, lengths, CID `0x0004`, the ATT opcodes (Write Command,
+Handle Value Notification), the handles and the values all decode as written, and the timestamps
+read back exactly. Wireshark flags each frame "out of any connection handle session" and shows the
+handles as "Unknown", because the capture has no connection setup or discovery.
+
+Unverified: no real adapter was used, so a capture of live traffic has not been looked at. The
+btsnoop layout rests on Wireshark's reader source, not on a Bluetooth clause.

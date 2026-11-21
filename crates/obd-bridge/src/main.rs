@@ -10,6 +10,8 @@
 // build has a backend that uses them outside tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod bridge;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod capture;
 mod config;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod link;
@@ -55,6 +57,23 @@ fn run() -> BridgeResult<()> {
         eprintln!("obd-bridge: {line}");
     }
 
+    // The tap outlives BLE reconnects and TCP clients, so one file holds the whole run. A tap that
+    // cannot be created is fatal at startup (the user asked for it); a later write error only
+    // disables it.
+    let tap = match &cfg.capture {
+        Some(c) => {
+            let tap = capture::Tap::create(&c.path, c.format, cfg.max_write)
+                .map_err(|e| format!("cannot create capture file {}: {e}", c.path.display()))?;
+            eprintln!(
+                "obd-bridge: capturing {:?} to {}",
+                c.format,
+                c.path.display()
+            );
+            tap
+        }
+        None => capture::Tap::disabled(),
+    };
+
     // Outer loop: (re)connect the BLE adapter.
     loop {
         let (ble, notify_rx) = match establish(&cfg) {
@@ -79,7 +98,7 @@ fn run() -> BridgeResult<()> {
             let _ = stream.set_nodelay(true);
             eprintln!("obd-bridge: client {peer} connected");
 
-            match bridge::run(stream, &ble, &notify_rx) {
+            match bridge::run(stream, &ble, &notify_rx, &tap) {
                 Ok(()) => eprintln!("obd-bridge: client {peer} disconnected"),
                 Err(e) => {
                     eprintln!("obd-bridge: BLE link lost ({e}); reconnecting adapter");

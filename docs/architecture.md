@@ -136,6 +136,24 @@ flowchart TD
     P1 -. "on BLE error: record + set stop" .-> STOP
 ```
 
+### Capture tap
+
+An optional `capture::Tap` observes both directions after delivery and records each value as a
+pcap/btsnoop record with synthesized HCI ACL / L2CAP / ATT framing (see [`capture.md`](capture.md)).
+
+![Capture tap](diagrams/capture-tap.svg)
+
+```mermaid
+flowchart LR
+    C["TCP client"] <--> P1["tcp → ble pump"]
+    C <--> P2["ble → tcp pump"]
+    P1 -->|"write"| A["BLE adapter"]
+    A -->|"notify"| P2
+    P1 -.->|"after write"| T["capture::Tap"]
+    P2 -.->|"after socket write"| T
+    T -->|"H4, ACL, L2CAP 0x0004, ATT"| F[("pcap 201 / btsnoop 1002 / text")]
+```
+
 ---
 
 ## 3. How the default BLE profile was recovered
@@ -185,6 +203,7 @@ that differ (e.g. Nordic-UART clones).
 | `config.rs`  | args + env parsing, UUID/address parsing, unit tests (platform-independent)           |
 | `ble.rs`     | WinRT backend: scan, connect, service/characteristic discovery, subscribe, write      |
 | `bridge.rs`  | the byte pipe: two relay directions inside a `thread::scope`                          |
+| `capture.rs` | optional capture tap: pcap/btsnoop/text writers with synthesized ATT framing          |
 
 See [`layout.md`](layout.md) for the dependency rationale and the enabled `windows`-crate features.
 

@@ -19,6 +19,10 @@ member lives in `crates/<name>/` and inherits both with `workspace = true`, mirr
   - `src/bridge.rs` — the byte pipe: two directions relayed inside a `std::thread::scope`, generic
     over `SerialLink`. Platform-independent; its tests drive it with an in-memory mock link and real
     loopback TCP, so the relay and error/reconnect contract are checked without a radio.
+  - `src/capture.rs` — the optional capture tap (`--capture`): pcap (link type 201), btsnoop and text
+    writers, std only, wrapping each relayed GATT value in synthesized HCI ACL / L2CAP / ATT framing.
+    `bridge::run` takes a `&Tap` and records after delivery. Platform-independent; see
+    [`capture.md`](capture.md).
 
 ## Dependencies
 

@@ -4,7 +4,10 @@
 //! an explicit command-line flag wins over the environment. See [`Config::from_args_and_env`].
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::time::Duration;
+
+use crate::capture::Format;
 
 /// The Bluetooth SIG base UUID `00000000-0000-1000-8000-00805F9B34FB`, into which a 16-bit
 /// "short" UUID is slotted at bits 96..=111. Recovered 16-bit assignments for the `OBDLink`
@@ -62,6 +65,17 @@ pub struct Config {
     pub max_write: usize,
     /// How long one scan attempt runs before retrying.
     pub scan_timeout: Duration,
+    /// Optional capture of the relayed traffic.
+    pub capture: Option<CaptureConfig>,
+}
+
+/// Where and how to record the relayed traffic (`--capture`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureConfig {
+    /// File to create (truncated if it exists).
+    pub path: PathBuf,
+    /// File format.
+    pub format: Format,
 }
 
 /// Error produced while parsing configuration.
@@ -92,6 +106,8 @@ OPTIONS:
     --notify <UUID>      notify characteristic UUID    (env OBD_BRIDGE_NOTIFY) [default: by property]
     --mtu <N>            max payload bytes per write   (env OBD_BRIDGE_MTU)    [default 20]
     --scan-timeout <S>   seconds per scan attempt      (env OBD_BRIDGE_SCAN)   [default 20]
+    --capture <PATH>     record relayed traffic to PATH (env OBD_BRIDGE_CAPTURE) [default: off]
+    --capture-format <F> pcap | btsnoop | text         (env OBD_BRIDGE_CAPTURE_FORMAT) [default pcap]
     -h, --help           print this help
 
 A UUID may be a 4-hex-digit short form (e.g. FFF0) or a full 128-bit UUID
@@ -203,6 +219,8 @@ impl Config {
         let mut notify = env("OBD_BRIDGE_NOTIFY");
         let mut mtu = env("OBD_BRIDGE_MTU");
         let mut scan = env("OBD_BRIDGE_SCAN");
+        let mut capture = env("OBD_BRIDGE_CAPTURE");
+        let mut capture_format = env("OBD_BRIDGE_CAPTURE_FORMAT");
 
         let mut it = args.into_iter();
         while let Some(arg) = it.next() {
@@ -220,6 +238,8 @@ impl Config {
                 "--notify" => notify = Some(take("--notify")?),
                 "--mtu" => mtu = Some(take("--mtu")?),
                 "--scan-timeout" => scan = Some(take("--scan-timeout")?),
+                "--capture" => capture = Some(take("--capture")?),
+                "--capture-format" => capture_format = Some(take("--capture-format")?),
                 other => return Err(ConfigError(format!("unknown argument: {other:?}"))),
             }
         }
@@ -271,6 +291,15 @@ impl Config {
             None => Duration::from_secs(DEFAULT_SCAN_SECS),
         };
 
+        let format = match capture_format {
+            Some(f) => Format::parse(&f).map_err(ConfigError)?,
+            None => Format::Pcap,
+        };
+        let capture = capture.map(|p| CaptureConfig {
+            path: PathBuf::from(p),
+            format,
+        });
+
         Ok(Some(Config {
             listen,
             name_filter,
@@ -280,6 +309,7 @@ impl Config {
             notify_uuid,
             max_write,
             scan_timeout,
+            capture,
         }))
     }
 }
@@ -335,6 +365,35 @@ mod tests {
         assert_eq!(cfg.name_filter.as_deref(), Some("`OBDLink`"));
         assert_eq!(cfg.max_write, 40);
         assert_eq!(cfg.service_uuid, DEFAULT_SERVICE_UUID);
+    }
+
+    #[test]
+    fn capture_defaults_off_and_flags_enable_it() {
+        let none = Config::from_args_and_env(std::iter::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(none.capture, None);
+
+        let args = ["--capture", "run.pcap"].into_iter().map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+        assert_eq!(
+            cfg.capture,
+            Some(CaptureConfig {
+                path: PathBuf::from("run.pcap"),
+                format: Format::Pcap
+            })
+        );
+
+        let args = ["--capture", "x", "--capture-format", "btsnoop"]
+            .into_iter()
+            .map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+        assert_eq!(cfg.capture.unwrap().format, Format::Btsnoop);
+
+        let args = ["--capture", "x", "--capture-format", "pcapng"]
+            .into_iter()
+            .map(String::from);
+        assert!(Config::from_args_and_env(args).is_err());
     }
 
     #[test]

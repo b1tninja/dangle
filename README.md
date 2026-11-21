@@ -51,6 +51,8 @@ OPTIONS:
     --notify <UUID>      notify characteristic UUID    (env OBD_BRIDGE_NOTIFY) [default: by property]
     --mtu <N>            max payload bytes per write   (env OBD_BRIDGE_MTU)    [default 20]
     --scan-timeout <S>   seconds per scan attempt      (env OBD_BRIDGE_SCAN)   [default 20]
+    --capture <PATH>     record relayed traffic to PATH (env OBD_BRIDGE_CAPTURE) [default: off]
+    --capture-format <F> pcap | btsnoop | text         (env OBD_BRIDGE_CAPTURE_FORMAT) [default pcap]
     -h, --help           print this help
 ```
 
@@ -86,6 +88,12 @@ loopback. The bridge rejects `--listen 10.0.2.2:<port>` and tells you to bind `1
 The bridge serves one TCP client at a time. If the BLE link drops it reconnects automatically; if a
 client disconnects, the adapter stays connected for the next one.
 
+## Capture
+
+`--capture <path>` writes the relayed traffic as a pcap (link type 201), btsnoop or text file. The
+Bluetooth framing in pcap/btsnoop is synthesized around GATT values; see
+[`docs/capture.md`](docs/capture.md) for exactly what that means and what was verified.
+
 ## Adapter BLE profile
 
 The default GATT service is `0xFFF0` with the write/notify characteristics discovered by property.
@@ -98,6 +106,7 @@ was recovered and for notes on other adapters (e.g. Nordic-UART clones), which t
 - [`docs/architecture.md`](docs/architecture.md) — how the bridge works and how the BLE profile was
   recovered, with diagrams (Mermaid inline + SVG under `docs/diagrams/`).
 - [`docs/ble-re.md`](docs/ble-re.md) — the full reverse-engineering write-up and GATT table.
+- [`docs/capture.md`](docs/capture.md) — the optional capture tap and its synthesized framing.
 - [`docs/layout.md`](docs/layout.md) — crate/module layout and dependency rationale.
 
 A Cargo workspace; the bridge binary is in `crates/obd-bridge/`.

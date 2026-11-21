@@ -14,9 +14,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::BridgeResult;
+use crate::capture::{Direction, Tap};
 use crate::link::SerialLink;
 
 /// Poll interval for the socket read timeout and notification receive, so both directions notice a
@@ -29,12 +30,16 @@ const POLL: Duration = Duration::from_millis(200);
 /// next client). Returns `Err` when a BLE write failed, signalling the caller to drop the adapter
 /// and reconnect.
 ///
+/// `tap` observes the relayed bytes after they have been delivered; it never alters or fails the
+/// relay (see [`crate::capture`]).
+///
 /// # Errors
 /// Returns an error if the socket cannot be configured or the BLE link failed during the session.
 pub fn run<L: SerialLink>(
     stream: TcpStream,
     ble: &L,
     notify: &Receiver<Vec<u8>>,
+    tap: &Tap,
 ) -> BridgeResult<()> {
     let read_stream = stream.try_clone()?;
     read_stream.set_read_timeout(Some(POLL))?;
@@ -43,8 +48,8 @@ pub fn run<L: SerialLink>(
     let ble_err: Mutex<Option<String>> = Mutex::new(None);
 
     thread::scope(|s| {
-        s.spawn(|| tcp_to_ble(read_stream, ble, &stop, &ble_err));
-        ble_to_tcp(stream, notify, &stop);
+        s.spawn(|| tcp_to_ble(read_stream, ble, tap, &stop, &ble_err));
+        ble_to_tcp(stream, notify, tap, &stop);
     });
 
     if let Some(message) = ble_err.into_inner().unwrap_or(None) {
@@ -57,6 +62,7 @@ pub fn run<L: SerialLink>(
 fn tcp_to_ble<L: SerialLink>(
     mut stream: TcpStream,
     ble: &L,
+    tap: &Tap,
     stop: &AtomicBool,
     ble_err: &Mutex<Option<String>>,
 ) {
@@ -65,12 +71,14 @@ fn tcp_to_ble<L: SerialLink>(
         match stream.read(&mut buf) {
             Ok(0) => break, // client closed the connection
             Ok(n) => {
+                let seen = SystemTime::now();
                 if let Err(e) = ble.write(&buf[..n]) {
                     if let Ok(mut slot) = ble_err.lock() {
                         *slot = Some(e.to_string());
                     }
                     break;
                 }
+                tap.record(seen, Direction::HostToAdapter, &buf[..n]);
             }
             Err(e)
                 if matches!(
@@ -87,13 +95,15 @@ fn tcp_to_ble<L: SerialLink>(
 }
 
 /// Drain adapter notifications and forward them to the socket. Exits when `stop` is set.
-fn ble_to_tcp(mut stream: TcpStream, notify: &Receiver<Vec<u8>>, stop: &AtomicBool) {
+fn ble_to_tcp(mut stream: TcpStream, notify: &Receiver<Vec<u8>>, tap: &Tap, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
         match notify.recv_timeout(POLL) {
             Ok(bytes) => {
+                let seen = SystemTime::now();
                 if stream.write_all(&bytes).is_err() {
                     break; // client gone
                 }
+                tap.record(seen, Direction::AdapterToHost, &bytes);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -191,7 +201,7 @@ mod tests {
         let (server, mut client) = pair();
         thread::scope(|s| {
             s.spawn(move || client_side(&mut client));
-            run(server, link, rx)
+            run(server, link, rx, &Tap::disabled())
         })
     }
 
@@ -275,5 +285,103 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().contains("mock link down"));
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::capture::Format;
+    use crate::link::SerialLink;
+    use std::io;
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::mpsc;
+
+    #[derive(Clone, Default)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct Sink(Mutex<Vec<u8>>);
+
+    impl SerialLink for Sink {
+        fn write(&self, data: &[u8]) -> BridgeResult<()> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(())
+        }
+    }
+
+    /// Writer that accepts the text-format "header" (none) and then always fails.
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("broken"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn pair() -> (TcpStream, TcpStream) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (server, _) = l.accept().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        (server, client)
+    }
+
+    /// Run one session: the client sends `ATZ\r`, the adapter answers `OK\r>`.
+    fn exchange(tap: &Tap) -> Vec<u8> {
+        let link = Sink(Mutex::new(Vec::new()));
+        let (tx, rx) = mpsc::channel();
+        tx.send(b"OK\r>".to_vec()).unwrap();
+        let (server, mut client) = pair();
+        let mut got = Vec::new();
+        thread::scope(|s| {
+            let got = &mut got;
+            s.spawn(move || {
+                client.write_all(b"ATZ\r").unwrap();
+                let mut b = [0u8; 1];
+                while client.read_exact(&mut b).is_ok() {
+                    got.push(b[0]);
+                    if b[0] == b'>' {
+                        break;
+                    }
+                }
+            });
+            run(server, &link, &rx, tap).unwrap();
+        });
+        assert_eq!(*link.0.lock().unwrap(), b"ATZ\r");
+        got
+    }
+
+    #[test]
+    fn tap_records_both_directions_and_relay_is_unchanged() {
+        let buf = Shared::default();
+        let tap = Tap::from_writer(Box::new(buf.clone()), Format::Text, 20).unwrap();
+        assert_eq!(exchange(&tap), b"OK\r>");
+        let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.contains("> 41 54 5a 0d  |ATZ.|"), "{text}");
+        assert!(text.contains("< 4f 4b 0d 3e  |OK.>|"), "{text}");
+    }
+
+    #[test]
+    fn broken_tap_does_not_break_the_relay() {
+        let tap = Tap::from_writer(Box::new(Broken), Format::Text, 20).unwrap();
+        assert_eq!(exchange(&tap), b"OK\r>");
+        assert!(!tap.is_active());
     }
 }

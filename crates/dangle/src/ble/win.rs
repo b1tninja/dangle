@@ -33,8 +33,8 @@ use windows::core::GUID;
 
 use crate::BridgeResult;
 use crate::config::{
-    Advert, Config, ScanFilter, Seen, SerialConfig, doctor_row, format_addr, rank_advertisers,
-    uuid_label,
+    Advert, Config, ScanFilter, Seen, SerialConfig, adverts_json, doctor_row, format_addr,
+    rank_advertisers, uuid_label,
 };
 use crate::link::{SerialLink, write_chunked};
 
@@ -146,21 +146,38 @@ pub fn scan_advertisers(
 /// # Errors
 /// Returns an error only if the advertisement watcher cannot be created or started.
 pub fn doctor(cfg: &Config) -> BridgeResult<()> {
+    // With --json, stdout is reserved for the JSON document; the adapter/progress notes go to
+    // stderr so a consumer can parse stdout cleanly.
+    let note = |line: &str| {
+        if cfg.json {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
+
     match BluetoothAdapter::GetDefaultAsync().and_then(|op| op.get()) {
         Ok(adapter) => {
             let le = adapter.IsLowEnergySupported().unwrap_or(false);
-            println!(
+            note(&format!(
                 "host Bluetooth adapter: present, Bluetooth LE {}",
                 if le { "supported" } else { "NOT supported" }
-            );
+            ));
         }
         Err(e) => {
-            println!("host Bluetooth adapter: could not query ({e}); is Bluetooth turned on?");
+            note(&format!(
+                "host Bluetooth adapter: could not query ({e}); is Bluetooth turned on?"
+            ));
         }
     }
 
-    println!("scanning for {:?} ...", cfg.scan_timeout);
+    note(&format!("scanning for {:?} ...", cfg.scan_timeout));
     let rows = scan_advertisers(cfg.scan_timeout, &cfg.scan_filter(), cfg.service_uuid)?;
+
+    if cfg.json {
+        println!("{}", adverts_json(&rows));
+        return Ok(());
+    }
 
     if rows.is_empty() {
         println!(

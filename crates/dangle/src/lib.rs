@@ -16,9 +16,10 @@
 //! - [`scan_advertisers`] runs the `WinRT` advertisement watcher and returns typed [`Advert`] rows
 //!   (address, name, RSSI, advertised service UUIDs, and a serial-service flag), serial-service
 //!   first then strongest signal — the same data the `scan` doctor prints.
-//! - [`connect`] opens the dongle's serial GATT service (default `0xFFF0`, a common value you can
-//!   override for other dongles), subscribes to notifications, and returns a [`BleSerial`] byte
-//!   sink plus a [`std::sync::mpsc::Receiver`] of the bytes the dongle sends back.
+//! - [`connect`] opens the dongle's serial GATT service, subscribes to notifications, and returns a
+//!   [`BleSerial`] byte sink plus a [`std::sync::mpsc::Receiver`] of the bytes the dongle sends
+//!   back. The service and characteristics come from a [`SerialConfig`]; named [`Preset`]s
+//!   ([`PRESETS`], e.g. `fff0` and `nordic-uart`) select a profile, with `fff0` the default.
 //! - [`SerialLink`] / [`write_chunked`] are the transport abstraction, and [`bridge::run`] is the
 //!   byte pipe the binary uses to relay a TCP client to a [`SerialLink`].
 //!
@@ -48,7 +49,9 @@ pub type BridgeResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + '
 pub use ble::{BleSerial, connect, scan_advertisers};
 pub use config::{
     Advert, Config, ConfigError, DEFAULT_LISTEN, DEFAULT_MAX_WRITE, DEFAULT_SCAN_SECS,
-    DEFAULT_SERVICE_UUID, ScanFilter, Seen, SerialConfig, advertises, doctor_row, format_addr,
-    parse_mac, parse_uuid, short_uuid, uuid_label,
+    DEFAULT_SERVICE_UUID, NORDIC_UART_NOTIFY_UUID, NORDIC_UART_SERVICE_UUID,
+    NORDIC_UART_WRITE_UUID, PRESETS, Preset, ScanFilter, Seen, SerialConfig, advertises,
+    doctor_row, find_preset, format_addr, parse_mac, parse_uuid, resolve_serial, short_uuid,
+    uuid_label,
 };
 pub use link::{SerialLink, write_chunked};

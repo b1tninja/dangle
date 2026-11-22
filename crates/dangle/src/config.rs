@@ -25,6 +25,20 @@ pub const fn short_uuid(short: u16) -> u128 {
 /// another service (e.g. a Nordic-UART clone). See `docs/ble-re.md` for how this default was chosen.
 pub const DEFAULT_SERVICE_UUID: u128 = short_uuid(0xFFF0);
 
+/// Nordic UART Service (NUS) base service UUID `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`.
+///
+/// NUS is a widely cloned 128-bit serial profile (distinct from the `FFF0` family); many non-OBD
+/// BLE serial dongles expose it. It is selectable by name as the `nordic-uart` preset. The
+/// characteristic UUIDs follow by incrementing the first 32-bit field: write
+/// ([`NORDIC_UART_WRITE_UUID`], `…0002…`) and notify ([`NORDIC_UART_NOTIFY_UUID`], `…0003…`).
+pub const NORDIC_UART_SERVICE_UUID: u128 = 0x6e40_0001_b5a3_f393_e0a9_e50e_24dc_ca9e;
+
+/// Nordic UART Service write characteristic `6E400002-B5A3-F393-E0A9-E50E24DCCA9E` (host → dongle).
+pub const NORDIC_UART_WRITE_UUID: u128 = 0x6e40_0002_b5a3_f393_e0a9_e50e_24dc_ca9e;
+
+/// Nordic UART Service notify characteristic `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` (dongle → host).
+pub const NORDIC_UART_NOTIFY_UUID: u128 = 0x6e40_0003_b5a3_f393_e0a9_e50e_24dc_ca9e;
+
 /// Default TCP endpoint the bridge listens on. Loopback-only by default so the republished
 /// dongle is not exposed to the network without a deliberate choice.
 ///
@@ -118,17 +132,24 @@ OPTIONS:
     --listen <ADDR>      TCP listen address            (env DANGLE_LISTEN) [default 127.0.0.1:35000]
     --name <SUBSTR>      adapter name must contain     (env DANGLE_NAME)
     --mac <AA:BB:..>     adapter Bluetooth address     (env DANGLE_MAC)
-    --service <UUID>     serial GATT service UUID       (env DANGLE_SERVICE) [default FFF0]
-    --write <UUID>       write characteristic UUID     (env DANGLE_WRITE)  [default: by property]
-    --notify <UUID>      notify characteristic UUID    (env DANGLE_NOTIFY) [default: by property]
+    --service <PRESET|UUID>  serial GATT service        (env DANGLE_SERVICE) [default fff0]
+    --write <UUID>       write characteristic UUID     (env DANGLE_WRITE)  [default: preset/by property]
+    --notify <UUID>      notify characteristic UUID    (env DANGLE_NOTIFY) [default: preset/by property]
     --mtu <N>            max payload bytes per write   (env DANGLE_MTU)    [default 20]
     --scan-timeout <S>   seconds per scan attempt      (env DANGLE_SCAN)   [default 20]
     --capture <PATH>     record relayed traffic to PATH (env DANGLE_CAPTURE) [default: off]
     --capture-format <F> pcap | btsnoop | text         (env DANGLE_CAPTURE_FORMAT) [default pcap]
     -h, --help           print this help
 
-A UUID may be a 4-hex-digit short form (e.g. FFF0) or a full 128-bit UUID
-(e.g. 0000fff0-0000-1000-8000-00805f9b34fb).";
+SERVICE PRESETS (--service <name>, a named profile that sets the service and, where the profile
+fixes them, the write/notify characteristics; --write/--notify still override):
+    fff0          FFF0-style serial service, characteristics by property; a common default on
+                  many ELM327/OBD dongles (aliases: obd, elm327)
+    nordic-uart   Nordic UART Service (6E400001-…): write 6E400002-…, notify 6E400003-…
+                  (aliases: nordic, nus)
+
+Instead of a preset name, --service / --write / --notify accept a UUID: a 4-hex-digit short form
+(e.g. FFF0) or a full 128-bit UUID (e.g. 0000fff0-0000-1000-8000-00805f9b34fb).";
 
 /// Parse a UUID given as a 4-hex short form or a full 36-character (dashed) / 32-hex UUID.
 ///
@@ -286,6 +307,111 @@ impl Default for SerialConfig {
             max_write: DEFAULT_MAX_WRITE,
         }
     }
+}
+
+/// A named BLE serial profile: a GATT service UUID and, where the profile fixes them, the write and
+/// notify characteristic UUIDs. Presets make the service UUID a first-class, user-selectable choice
+/// (`--service <name>`) rather than only a raw UUID, so the bridge is not tied to the OBD-style
+/// `FFF0` default. [`PRESETS`] lists the built-in profiles; [`find_preset`] looks one up by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Preset {
+    /// Canonical preset name, as typed on the CLI (e.g. `"nordic-uart"`).
+    pub name: &'static str,
+    /// Accepted alternative names for the same preset.
+    pub aliases: &'static [&'static str],
+    /// GATT service UUID carrying the serial stream.
+    pub service_uuid: u128,
+    /// Write-characteristic UUID when the profile fixes it; `None` means discover it by property.
+    pub write_uuid: Option<u128>,
+    /// Notify-characteristic UUID when the profile fixes it; `None` means discover it by property.
+    pub notify_uuid: Option<u128>,
+    /// One-line human description, shown in `--help`.
+    pub description: &'static str,
+}
+
+impl Preset {
+    /// Whether `name` is this preset's canonical name or one of its aliases (case-insensitive).
+    #[must_use]
+    pub fn matches_name(&self, name: &str) -> bool {
+        self.name.eq_ignore_ascii_case(name)
+            || self.aliases.iter().any(|a| a.eq_ignore_ascii_case(name))
+    }
+
+    /// The [`SerialConfig`] this preset implies, with the default write size.
+    #[must_use]
+    pub fn serial_config(&self) -> SerialConfig {
+        SerialConfig {
+            service_uuid: self.service_uuid,
+            write_uuid: self.write_uuid,
+            notify_uuid: self.notify_uuid,
+            max_write: DEFAULT_MAX_WRITE,
+        }
+    }
+}
+
+/// The built-in serial profiles selectable by name on `--service`.
+///
+/// `fff0` is the default profile (it expands to [`DEFAULT_SERVICE_UUID`]); `nordic-uart` is the
+/// Nordic UART Service. Both can still be overridden per field with `--service <uuid>` / `--write`
+/// / `--notify` for a dongle that matches neither.
+pub const PRESETS: &[Preset] = &[
+    Preset {
+        name: "fff0",
+        aliases: &["obd", "elm327"],
+        service_uuid: DEFAULT_SERVICE_UUID,
+        write_uuid: None,
+        notify_uuid: None,
+        description: "FFF0-style serial service, characteristics by property; a common default on \
+                      many ELM327/OBD dongles",
+    },
+    Preset {
+        name: "nordic-uart",
+        aliases: &["nordic", "nus"],
+        service_uuid: NORDIC_UART_SERVICE_UUID,
+        write_uuid: Some(NORDIC_UART_WRITE_UUID),
+        notify_uuid: Some(NORDIC_UART_NOTIFY_UUID),
+        description: "Nordic UART Service (6E400001-…): write 6E400002-…, notify 6E400003-…",
+    },
+];
+
+/// Look up a built-in [`Preset`] by canonical name or alias (case-insensitive).
+#[must_use]
+pub fn find_preset(name: &str) -> Option<&'static Preset> {
+    PRESETS.iter().find(|p| p.matches_name(name))
+}
+
+/// Resolve the serial GATT parameters from the `--service` / `--write` / `--notify` values.
+///
+/// `service` may name a built-in [`Preset`] (e.g. `nordic-uart` or `fff0`) or a raw UUID. A preset
+/// supplies the service UUID and, where it fixes them, the write/notify characteristics; an explicit
+/// `write`/`notify` overrides the preset's. A raw UUID sets only the service, leaving the
+/// characteristics to property-based discovery. When `service` is `None` the default is the `FFF0`
+/// profile with characteristics discovered by property — the historical default behaviour.
+///
+/// # Errors
+/// Returns [`ConfigError`] if `service` is neither a known preset nor a valid UUID, or if `write`
+/// or `notify` is not a valid UUID.
+pub fn resolve_serial(
+    service: Option<&str>,
+    write: Option<&str>,
+    notify: Option<&str>,
+) -> Result<(u128, Option<u128>, Option<u128>), ConfigError> {
+    let (service_uuid, base_write, base_notify) = match service {
+        None => (DEFAULT_SERVICE_UUID, None, None),
+        Some(s) => match find_preset(s) {
+            Some(p) => (p.service_uuid, p.write_uuid, p.notify_uuid),
+            None => (parse_uuid(s)?, None, None),
+        },
+    };
+    let write_uuid = match write {
+        Some(w) => Some(parse_uuid(w)?),
+        None => base_write,
+    };
+    let notify_uuid = match notify {
+        Some(n) => Some(parse_uuid(n)?),
+        None => base_notify,
+    };
+    Ok((service_uuid, write_uuid, notify_uuid))
 }
 
 /// Whether `services` includes the serial service `serial`.
@@ -499,18 +625,8 @@ impl Config {
             Some(m) => Some(parse_mac(&m)?),
             None => None,
         };
-        let service_uuid = match service {
-            Some(u) => parse_uuid(&u)?,
-            None => DEFAULT_SERVICE_UUID,
-        };
-        let write_uuid = match write {
-            Some(u) => Some(parse_uuid(&u)?),
-            None => None,
-        };
-        let notify_uuid = match notify {
-            Some(u) => Some(parse_uuid(&u)?),
-            None => None,
-        };
+        let (service_uuid, write_uuid, notify_uuid) =
+            resolve_serial(service.as_deref(), write.as_deref(), notify.as_deref())?;
         let max_write = match mtu {
             Some(n) => n
                 .parse::<usize>()
@@ -832,5 +948,138 @@ mod tests {
         assert!(text.contains("10.0.2.2:35000"), "{text}");
         assert!(text.contains("127.0.0.1:35000"), "{text}");
         assert!(text.contains("Wi-Fi host to 10.0.2.2 port 35000"), "{text}");
+    }
+
+    #[test]
+    fn nordic_uart_constants_round_trip_through_uuid_text() {
+        // The three NUS UUIDs differ only in the first 32-bit field (…0001/0002/0003).
+        assert_eq!(
+            parse_uuid("6e400001-b5a3-f393-e0a9-e50e24dcca9e").unwrap(),
+            NORDIC_UART_SERVICE_UUID
+        );
+        assert_eq!(
+            parse_uuid("6e400002-b5a3-f393-e0a9-e50e24dcca9e").unwrap(),
+            NORDIC_UART_WRITE_UUID
+        );
+        assert_eq!(
+            parse_uuid("6e400003-b5a3-f393-e0a9-e50e24dcca9e").unwrap(),
+            NORDIC_UART_NOTIFY_UUID
+        );
+        // NUS is a full 128-bit UUID, so it renders in the dashed long form, not a short code.
+        assert_eq!(
+            uuid_label(NORDIC_UART_SERVICE_UUID),
+            "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+        );
+    }
+
+    #[test]
+    fn find_preset_matches_name_and_aliases_case_insensitively() {
+        let fff0 = find_preset("fff0").unwrap();
+        assert_eq!(fff0.service_uuid, DEFAULT_SERVICE_UUID);
+        assert_eq!(fff0.write_uuid, None);
+        assert_eq!(fff0.notify_uuid, None);
+        // Aliases and case folding both resolve to the same preset.
+        assert_eq!(find_preset("OBD"), Some(fff0));
+        assert_eq!(find_preset("Elm327"), Some(fff0));
+
+        let nus = find_preset("nordic-uart").unwrap();
+        assert_eq!(nus.service_uuid, NORDIC_UART_SERVICE_UUID);
+        assert_eq!(nus.write_uuid, Some(NORDIC_UART_WRITE_UUID));
+        assert_eq!(nus.notify_uuid, Some(NORDIC_UART_NOTIFY_UUID));
+        assert_eq!(find_preset("NUS"), Some(nus));
+        assert_eq!(find_preset("nordic"), Some(nus));
+
+        assert_eq!(find_preset("no-such-preset"), None);
+
+        // The preset's SerialConfig carries its characteristics and the default write size.
+        assert_eq!(
+            nus.serial_config(),
+            SerialConfig {
+                service_uuid: NORDIC_UART_SERVICE_UUID,
+                write_uuid: Some(NORDIC_UART_WRITE_UUID),
+                notify_uuid: Some(NORDIC_UART_NOTIFY_UUID),
+                max_write: DEFAULT_MAX_WRITE,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_serial_defaults_to_fff0_by_property() {
+        // No --service: the historical default, FFF0 with characteristics discovered by property.
+        assert_eq!(
+            resolve_serial(None, None, None).unwrap(),
+            (DEFAULT_SERVICE_UUID, None, None)
+        );
+    }
+
+    #[test]
+    fn resolve_serial_expands_a_preset_name() {
+        assert_eq!(
+            resolve_serial(Some("nordic-uart"), None, None).unwrap(),
+            (
+                NORDIC_UART_SERVICE_UUID,
+                Some(NORDIC_UART_WRITE_UUID),
+                Some(NORDIC_UART_NOTIFY_UUID)
+            )
+        );
+        // The fff0 preset is equivalent to the default.
+        assert_eq!(
+            resolve_serial(Some("fff0"), None, None).unwrap(),
+            (DEFAULT_SERVICE_UUID, None, None)
+        );
+    }
+
+    #[test]
+    fn resolve_serial_accepts_a_raw_uuid_as_the_service() {
+        // A raw service UUID sets only the service; characteristics stay by-property.
+        assert_eq!(
+            resolve_serial(Some("fff0"), None, None).unwrap().0,
+            resolve_serial(Some("FFF0"), None, None).unwrap().0
+        );
+        let (service, write, notify) =
+            resolve_serial(Some("1234-5678-9abc-def0-1122-3344-5566-7788"), None, None).unwrap();
+        assert_eq!(service, 0x1234_5678_9abc_def0_1122_3344_5566_7788);
+        assert_eq!((write, notify), (None, None));
+    }
+
+    #[test]
+    fn resolve_serial_lets_explicit_chars_override_a_preset() {
+        let (service, write, notify) = resolve_serial(
+            Some("nordic-uart"),
+            Some("FFE1"),
+            Some("0000ffe2-0000-1000-8000-00805f9b34fb"),
+        )
+        .unwrap();
+        assert_eq!(service, NORDIC_UART_SERVICE_UUID);
+        assert_eq!(write, Some(short_uuid(0xFFE1)));
+        assert_eq!(notify, Some(short_uuid(0xFFE2)));
+    }
+
+    #[test]
+    fn resolve_serial_rejects_an_unknown_service() {
+        // Neither a preset nor a valid UUID.
+        assert!(resolve_serial(Some("not-a-thing"), None, None).is_err());
+        // A preset service but an invalid override UUID.
+        assert!(resolve_serial(Some("fff0"), Some("zzzz"), None).is_err());
+    }
+
+    #[test]
+    fn service_preset_flows_through_from_args_and_env() {
+        let args = ["--service", "nordic-uart"].into_iter().map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+        let serial = cfg.serial();
+        assert_eq!(serial.service_uuid, NORDIC_UART_SERVICE_UUID);
+        assert_eq!(serial.write_uuid, Some(NORDIC_UART_WRITE_UUID));
+        assert_eq!(serial.notify_uuid, Some(NORDIC_UART_NOTIFY_UUID));
+
+        // An explicit --write overrides the preset's write characteristic.
+        let args = ["--service", "nus", "--write", "FFE1"]
+            .into_iter()
+            .map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+        let serial = cfg.serial();
+        assert_eq!(serial.service_uuid, NORDIC_UART_SERVICE_UUID);
+        assert_eq!(serial.write_uuid, Some(short_uuid(0xFFE1)));
+        assert_eq!(serial.notify_uuid, Some(NORDIC_UART_NOTIFY_UUID));
     }
 }

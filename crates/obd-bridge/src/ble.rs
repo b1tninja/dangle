@@ -11,35 +11,151 @@
 //! callbacks are delivered on MTA thread-pool threads. No explicit `RoInitialize`/`CoInitializeEx`
 //! is needed (and avoiding it keeps this crate free of `unsafe`).
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use windows::Devices::Bluetooth::Advertisement::{
     BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
     BluetoothLEScanningMode,
 };
-use windows::Devices::Bluetooth::BluetoothLEDevice;
 use windows::Devices::Bluetooth::GenericAttributeProfile::{
     GattCharacteristic, GattCharacteristicProperties,
     GattClientCharacteristicConfigurationDescriptorValue, GattCommunicationStatus,
     GattDeviceService, GattValueChangedEventArgs, GattWriteOption,
 };
+use windows::Devices::Bluetooth::{BluetoothAdapter, BluetoothLEDevice};
 use windows::Foundation::{EventRegistrationToken, TypedEventHandler};
 use windows::Storage::Streams::{DataReader, DataWriter};
 use windows::core::GUID;
 
 use crate::BridgeResult;
-use crate::config::Config;
+use crate::config::{self, Config, Seen, doctor_row, format_addr};
 use crate::link::{SerialLink, write_chunked};
 
-/// Format a 48-bit Bluetooth address as `AA:BB:CC:DD:EE:FF` for logging.
-#[must_use]
-pub fn format_addr(addr: u64) -> String {
-    let b = addr.to_be_bytes();
-    format!(
-        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-        b[2], b[3], b[4], b[5], b[6], b[7]
-    )
+/// Convert a `WinRT` [`GUID`] to its 128-bit value (the inverse of [`GUID::from_u128`]).
+fn guid_to_u128(g: GUID) -> u128 {
+    (u128::from(g.data1) << 96)
+        | (u128::from(g.data2) << 80)
+        | (u128::from(g.data3) << 64)
+        | u128::from(u64::from_be_bytes(g.data4))
+}
+
+/// Pre-flight doctor: report the host adapter and list the BLE advertisers the radio sees, marking
+/// the one that carries the serial service, then return. This opens no GATT connection and binds no
+/// socket; it is the read-only check an operator runs before a capture to confirm the adapter is
+/// visible and to read off the `--mac`/`--service` to use.
+///
+/// # Errors
+/// Returns an error only if the advertisement watcher cannot be created or started.
+pub fn doctor(cfg: &Config) -> BridgeResult<()> {
+    match BluetoothAdapter::GetDefaultAsync().and_then(|op| op.get()) {
+        Ok(adapter) => {
+            let le = adapter.IsLowEnergySupported().unwrap_or(false);
+            println!(
+                "host Bluetooth adapter: present, Bluetooth LE {}",
+                if le { "supported" } else { "NOT supported" }
+            );
+        }
+        Err(e) => {
+            println!("host Bluetooth adapter: could not query ({e}); is Bluetooth turned on?");
+        }
+    }
+
+    let watcher = BluetoothLEAdvertisementWatcher::new()?;
+    watcher.SetScanningMode(BluetoothLEScanningMode::Active)?;
+
+    let (tx, rx) = mpsc::channel::<(u64, String, i16, Vec<u128>)>();
+    let tx = Arc::new(Mutex::new(tx));
+    let handler = TypedEventHandler::new(
+        move |_sender, args: &Option<BluetoothLEAdvertisementReceivedEventArgs>| {
+            if let Some(args) = args.as_ref() {
+                let addr = args.BluetoothAddress()?;
+                let rssi = args.RawSignalStrengthInDBm().unwrap_or(0);
+                let adv = args.Advertisement()?;
+                let name = adv.LocalName().map(|h| h.to_string()).unwrap_or_default();
+                let mut services = Vec::new();
+                if let Ok(uuids) = adv.ServiceUuids() {
+                    for i in 0..uuids.Size().unwrap_or(0) {
+                        if let Ok(g) = uuids.GetAt(i) {
+                            services.push(guid_to_u128(g));
+                        }
+                    }
+                }
+                if let Ok(tx) = tx.lock() {
+                    let _ = tx.send((addr, name, rssi, services));
+                }
+            }
+            Ok(())
+        },
+    );
+
+    let token = watcher.Received(&handler)?;
+    watcher.Start()?;
+    println!("scanning for {:?} ...", cfg.scan_timeout);
+
+    let deadline = Instant::now() + cfg.scan_timeout;
+    let mut seen: BTreeMap<u64, Seen> = BTreeMap::new();
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(remaining) {
+            Ok((addr, name, rssi, services)) => {
+                let entry = seen.entry(addr).or_insert_with(|| Seen {
+                    addr,
+                    name: String::new(),
+                    rssi: i16::MIN,
+                    services: Vec::new(),
+                });
+                if !name.is_empty() {
+                    entry.name = name;
+                }
+                if rssi > entry.rssi {
+                    entry.rssi = rssi;
+                }
+                for s in services {
+                    if !entry.services.contains(&s) {
+                        entry.services.push(s);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = watcher.Stop();
+    let _ = watcher.RemoveReceived(token);
+
+    let mut rows: Vec<&Seen> = seen
+        .values()
+        .filter(|s| {
+            cfg.name_filter
+                .as_deref()
+                .is_none_or(|n| s.name.to_lowercase().contains(&n.to_lowercase()))
+        })
+        .filter(|s| cfg.mac_filter.is_none_or(|m| m == s.addr))
+        .collect();
+    // Serial-service advertisers first, then strongest signal.
+    rows.sort_by(|a, b| {
+        let sa = config::advertises(&a.services, cfg.service_uuid);
+        let sb = config::advertises(&b.services, cfg.service_uuid);
+        sb.cmp(&sa).then(b.rssi.cmp(&a.rssi))
+    });
+
+    if rows.is_empty() {
+        println!(
+            "no matching BLE advertisers seen. Is the adapter powered (plugged into the OBD port) \
+             and in range? Pairing it once in Windows Bluetooth settings helps."
+        );
+    } else {
+        println!(
+            "{} BLE advertiser(s) seen (serial service {} marked):",
+            rows.len(),
+            config::uuid_label(cfg.service_uuid)
+        );
+        for s in rows {
+            println!("  {}", doctor_row(s, cfg.service_uuid));
+        }
+    }
+    Ok(())
 }
 
 /// Scan for a BLE adapter matching the configured name/address filters and return its 48-bit
@@ -317,5 +433,19 @@ impl Drop for BleSerial {
         let _ = self
             .notify_char
             .RemoveValueChanged(self.value_changed_token);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::short_uuid;
+
+    #[test]
+    fn guid_to_u128_inverts_from_u128() {
+        let serial = short_uuid(0xFFF0);
+        assert_eq!(guid_to_u128(GUID::from_u128(serial)), serial);
+        let full = 0x1234_5678_9abc_def0_1122_3344_5566_7788_u128;
+        assert_eq!(guid_to_u128(GUID::from_u128(full)), full);
     }
 }

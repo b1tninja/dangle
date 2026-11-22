@@ -73,6 +73,19 @@ The bridge binds a host address. The standard Android emulator reaches the host'
 | [ok] | `--help` returns no config, and an unknown flag is an error | `src/config.rs` | `config::tests::help_returns_none`; `config::tests::unknown_flag_errors` |
 | [open] | The live scan applies `--name` and `--mac` to an advertisement | `src/ble.rs` `scan_for_adapter` | none: needs a dongle |
 
+## Pre-flight scan (doctor)
+
+The `scan` subcommand (alias `doctor`) is a read-only check an operator runs before a capture: it
+lists the host adapter and the BLE advertisers the radio sees, marking the one that carries the
+serial service, then exits. It opens no GATT connection and binds no socket.
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [ok] | The `scan` (alias `doctor`) subcommand selects the doctor mode; without it the bridge runs | `src/config.rs` `from_args_and_env`, `Mode` | `config::tests::scan_subcommand_sets_doctor_mode` |
+| [ok] | A seen advertiser renders as address, signal, name and services, marking the one that advertises the serial service; a UUID on the Bluetooth base shows in its short form | `src/config.rs` `doctor_row`, `uuid_label`, `format_addr` | `config::tests::doctor_row_marks_the_serial_service`; `config::tests::uuid_label_shortens_base_uuids_only`; `config::tests::format_addr_is_colon_hex` |
+| [ok] | A `WinRT` GUID round-trips to its 128-bit UUID | `src/ble.rs` `guid_to_u128` | `ble::tests::guid_to_u128_inverts_from_u128` |
+| [open] | The live `scan` reports the host adapter and lists nearby BLE advertisers over the radio | `src/ble.rs` `doctor` | none: needs a dongle |
+
 ## Left unbuilt
 
 | Status | Obligation | Anchor | Test |

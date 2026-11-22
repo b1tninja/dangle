@@ -51,6 +51,10 @@ fn run() -> BridgeResult<()> {
         }
     };
 
+    if cfg.mode == config::Mode::Doctor {
+        return ble::doctor(&cfg);
+    }
+
     let listener = TcpListener::bind(cfg.listen)?;
     let bound = listener.local_addr()?;
     for line in config::listen_notice(bound).lines() {
@@ -118,7 +122,7 @@ fn establish(
     let shown = if name.is_empty() { "<unnamed>" } else { &name };
     eprintln!(
         "obd-bridge: found adapter {shown} at {}",
-        ble::format_addr(addr)
+        config::format_addr(addr)
     );
     ble::connect(cfg, addr)
 }

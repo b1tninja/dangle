@@ -49,9 +49,10 @@ pub type BridgeResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + '
 pub use ble::{BleSerial, connect, scan_advertisers};
 pub use config::{
     Advert, Config, ConfigError, DEFAULT_LISTEN, DEFAULT_MAX_WRITE, DEFAULT_SCAN_SECS,
-    DEFAULT_SERVICE_UUID, NORDIC_UART_NOTIFY_UUID, NORDIC_UART_SERVICE_UUID,
-    NORDIC_UART_WRITE_UUID, PRESETS, Preset, ScanFilter, Seen, SerialConfig, advertises,
-    doctor_row, find_preset, format_addr, parse_mac, parse_uuid, resolve_serial, short_uuid,
-    uuid_label,
+    DEFAULT_SERVICE_UUID, HM10_CHAR_UUID, HM10_SERVICE_UUID, MICROCHIP_UART_NOTIFY_UUID,
+    MICROCHIP_UART_SERVICE_UUID, MICROCHIP_UART_WRITE_UUID, NORDIC_UART_NOTIFY_UUID,
+    NORDIC_UART_SERVICE_UUID, NORDIC_UART_WRITE_UUID, PRESETS, Preset, ScanFilter, Seen,
+    SerialConfig, advertises, adverts_json, doctor_row, find_preset, format_addr, parse_mac,
+    parse_uuid, resolve_serial, short_uuid, uuid_label,
 };
 pub use link::{SerialLink, write_chunked};

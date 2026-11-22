@@ -45,7 +45,9 @@ The executable is `target/release/dangle.exe`.
 ## Usage
 
 ```
-dangle [OPTIONS]
+dangle [OPTIONS]              connect the dongle and run the TCP bridge
+dangle scan [OPTIONS]         list nearby BLE advertisers, then exit (add --json for JSON)
+dangle pipe [OPTIONS]         connect the dongle and relay its serial on stdin/stdout
 
 OPTIONS:
     --listen <ADDR>      TCP listen address            (env DANGLE_LISTEN) [default 127.0.0.1:35000]
@@ -58,6 +60,7 @@ OPTIONS:
     --scan-timeout <S>   seconds per scan attempt      (env DANGLE_SCAN)   [default 20]
     --capture <PATH>     record relayed traffic to PATH (env DANGLE_CAPTURE) [default: off]
     --capture-format <F> pcap | btsnoop | text         (env DANGLE_CAPTURE_FORMAT) [default pcap]
+    --json               (scan only) print advertisers as JSON on stdout
     -h, --help           print this help
 ```
 
@@ -72,6 +75,8 @@ The GATT serial service is a **first-class, user-selectable choice**, not a fixe
 |---|---|---|---|
 | `fff0` (default) | `obd`, `elm327` | `0xFFF0` | discovered by property |
 | `nordic-uart` | `nordic`, `nus` | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | `…0002-…` / `…0003-…` |
+| `microchip-uart` | `microchip`, `issc`, `transparent-uart` | `49535343-FE7D-4AE5-8FA9-9FAFD205E455` | `…8841-…` / `…1E4D-…` |
+| `hm10` | `ffe0`, `cc2541` | `0xFFE0` | `0xFFE1` / `0xFFE1` (one characteristic) |
 
 A preset sets the service and, where the profile fixes them, the write/notify characteristics;
 `--write` / `--notify` still override per field. Instead of a preset name, `--service` /
@@ -119,6 +124,30 @@ client disconnects, the dongle stays connected for the next one.
 it can see, marking the one that carries the serial service, then exits. Run it to confirm a dongle
 is visible and read off the `--mac` / `--service` to use, without opening a GATT connection or
 binding a socket.
+
+Add `--json` to emit the advertisers as a JSON array on **stdout** (the adapter and progress notes
+go to stderr, so stdout parses cleanly). Each row is
+`{"address","name","rssi","services":[…],"has_serial_service"}`, using the same address and UUID
+text forms as the table — handy for a tool that drives a device chooser without linking the library:
+
+```
+dangle scan --json --scan-timeout 5
+```
+
+## Connect-and-pipe
+
+`dangle pipe` connects to the dongle (same `--name` / `--mac` / `--service` selection as the bridge)
+and relays its serial stream between the dongle and this process's **stdin/stdout**, with no TCP
+server. It is a connect-and-pipe demo of the library's scan/connect path; it exits when stdin reaches
+EOF (Ctrl-Z then Enter on Windows) or the link drops on the next write. For example, to send one
+ELM327 command and watch the reply:
+
+```
+echo ATZ> dangle pipe --name OBDLink
+```
+
+(The bridge, not `pipe`, is what a Wi-Fi OBD app or an emulator talks to; `pipe` is for quick local
+checks and scripting against a dongle.)
 
 ## Capture
 

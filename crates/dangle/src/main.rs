@@ -46,6 +46,10 @@ fn run() -> BridgeResult<()> {
         return ble::doctor(&cfg);
     }
 
+    if cfg.mode == config::Mode::Pipe {
+        return pipe(&cfg);
+    }
+
     let listener = TcpListener::bind(cfg.listen)?;
     let bound = listener.local_addr()?;
     for line in config::listen_notice(bound).lines() {
@@ -98,6 +102,59 @@ fn run() -> BridgeResult<()> {
             }
         }
     }
+}
+
+/// Connect to the dongle and relay its serial stream on this process's stdin/stdout, with no TCP
+/// server (the `pipe` subcommand).
+///
+/// A connect-and-pipe demo that drives the library's scan/connect path directly: bytes read from
+/// stdin go to the dongle, and bytes the dongle sends arrive on stdout. It returns when stdin
+/// reaches EOF (Ctrl-Z then Enter on Windows) or the link drops on the next write.
+#[cfg(windows)]
+fn pipe(cfg: &config::Config) -> BridgeResult<()> {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
+
+    use dangle::link::SerialLink;
+
+    let (ble, notify_rx) = establish(cfg)?;
+    eprintln!("dangle: dongle connected; relaying stdin<->dongle (Ctrl-Z then Enter to end)");
+
+    let stop = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        // stdin -> dongle
+        s.spawn(|| {
+            let mut stdin = std::io::stdin().lock();
+            let mut buf = [0u8; 1024];
+            while !stop.load(Ordering::Relaxed) {
+                match stdin.read(&mut buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) if ble.write(&buf[..n]).is_ok() => {}
+                    _ => break, // read error or BLE write failed (link dropped)
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+        });
+
+        // dongle -> stdout
+        let mut stdout = std::io::stdout().lock();
+        while !stop.load(Ordering::Relaxed) {
+            match notify_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(bytes) => {
+                    if stdout.write_all(&bytes).is_err() || stdout.flush().is_err() {
+                        break;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {} // re-check the stop flag
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+    });
+
+    Ok(())
 }
 
 /// Scan for the configured adapter and open a serial connection to it.

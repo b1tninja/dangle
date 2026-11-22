@@ -79,8 +79,8 @@ The bridge binds a host address. The standard Android emulator reaches the host'
 | [ok] | The default GATT service is the 16-bit value `FFF0` expanded onto the Bluetooth base UUID, and both the short form and the dashed 128-bit form parse to it | `docs/ble-re.md`; `DEFAULT_SERVICE_UUID` | `config::tests::short_uuid_expands_onto_bluetooth_base`; `config::tests::parse_uuid_accepts_short_and_full` |
 | [ok] | A Bluetooth address is 12 hex digits, with colons or dashes optional | `src/config.rs` `parse_mac` | `config::tests::parse_mac_handles_separators` |
 | [ok] | `--listen`, `--name`, and `--mtu` override those fields, and an omitted `--service` stays `FFF0` | `src/config.rs` | `config::tests::args_override_defaults` |
-| [ok] | The serial GATT service is a first-class choice: `--service` names a built-in preset (`fff0`, `nordic-uart`, with aliases) or a raw UUID; a preset supplies the service and, where fixed, the write/notify characteristics; `--write`/`--notify` override per field; omitting `--service` stays the `FFF0`-by-property default | `src/config.rs` `Preset`, `PRESETS`, `find_preset`, `resolve_serial` | `config::tests::find_preset_matches_name_and_aliases_case_insensitively`; `config::tests::resolve_serial_defaults_to_fff0_by_property`; `config::tests::resolve_serial_expands_a_preset_name`; `config::tests::resolve_serial_accepts_a_raw_uuid_as_the_service`; `config::tests::resolve_serial_lets_explicit_chars_override_a_preset`; `config::tests::resolve_serial_rejects_an_unknown_service`; `config::tests::service_preset_flows_through_from_args_and_env` |
-| [ok] | The Nordic UART Service UUIDs are the three `6E4000xx-…` constants, differing only in the first 32-bit field | `src/config.rs` `NORDIC_UART_*_UUID` | `config::tests::nordic_uart_constants_round_trip_through_uuid_text` |
+| [ok] | The serial GATT service is a first-class choice: `--service` names a built-in preset (`fff0`, `nordic-uart`, `microchip-uart`, `hm10`, with aliases) or a raw UUID; a preset supplies the service and, where fixed, the write/notify characteristics; `--write`/`--notify` override per field; omitting `--service` stays the `FFF0`-by-property default | `src/config.rs` `Preset`, `PRESETS`, `find_preset`, `resolve_serial` | `config::tests::find_preset_matches_name_and_aliases_case_insensitively`; `config::tests::resolve_serial_defaults_to_fff0_by_property`; `config::tests::resolve_serial_expands_a_preset_name`; `config::tests::resolve_serial_accepts_a_raw_uuid_as_the_service`; `config::tests::resolve_serial_lets_explicit_chars_override_a_preset`; `config::tests::resolve_serial_rejects_an_unknown_service`; `config::tests::service_preset_flows_through_from_args_and_env` |
+| [ok] | The Nordic UART, Microchip/ISSC Transparent UART and HM-10 preset UUIDs match their documented values; every preset name/alias is unique and resolves | `src/config.rs` `NORDIC_UART_*`, `MICROCHIP_UART_*`, `HM10_*`, `PRESETS` | `config::tests::nordic_uart_constants_round_trip_through_uuid_text`; `config::tests::microchip_and_hm10_presets_carry_their_characteristics`; `config::tests::every_preset_name_and_alias_is_unique` |
 | [ok] | `--help` returns no config, and an unknown flag is an error | `src/config.rs` | `config::tests::help_returns_none`; `config::tests::unknown_flag_errors` |
 | [open] | The live scan applies `--name` and `--mac` to an advertisement | `src/ble/win.rs` `scan_for_adapter` | none: needs a dongle |
 
@@ -96,7 +96,19 @@ service, then exits. It opens no GATT connection and binds no socket.
 | [ok] | A seen advertiser renders as address, signal, name and services, marking the one that advertises the serial service; a UUID on the Bluetooth base shows in its short form | `src/config.rs` `doctor_row`, `uuid_label`, `format_addr` | `config::tests::doctor_row_marks_the_serial_service`; `config::tests::uuid_label_shortens_base_uuids_only`; `config::tests::format_addr_is_colon_hex` |
 | [ok] | A `WinRT` GUID round-trips to its 128-bit UUID | `src/ble/win.rs` `guid_to_u128` | `ble::win::tests::guid_to_u128_inverts_from_u128` |
 | [ok] | Collected advertisers are filtered by name/address, flagged for the serial service, and ordered serial-service first then strongest signal | `src/config.rs` `rank_advertisers`, `ScanFilter` | `config::tests::rank_advertisers_filters_flags_and_orders` |
-| [open] | The live `scan` reports the host radio and lists nearby BLE advertisers over the radio | `src/ble/win.rs` `doctor`, `scan_advertisers` | none: needs a dongle |
+| [ok] | `scan --json` emits the advertisers as a JSON array (address, name, rssi, services, serial flag) with control characters escaped; an empty scan is `[]` | `src/config.rs` `adverts_json`, `json_escape`; `src/ble/win.rs` `doctor` | `config::tests::adverts_json_empty_is_an_empty_array`; `config::tests::adverts_json_renders_rows_with_escaping`; `config::tests::json_escape_covers_control_characters`; `config::tests::json_flag_defaults_off_and_is_set_by_scan_json` |
+| [open] | The live `scan` reports the host radio and lists nearby BLE advertisers over the radio; with `--json` the advertisers go to stdout and the notes to stderr | `src/ble/win.rs` `doctor`, `scan_advertisers` | none: needs a dongle |
+
+## Connect-and-pipe (pipe)
+
+The `pipe` subcommand connects to the dongle (same `--name`/`--mac`/`--service` selection as the
+bridge) and relays its serial stream on stdin/stdout, with no TCP server. It is a connect-and-pipe
+demo of the library's scan/connect path, for quick local checks and scripting.
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [ok] | The `pipe` subcommand selects pipe mode, and the selection flags still parse after it | `src/config.rs` `take_mode`, `Mode::Pipe` | `config::tests::pipe_subcommand_sets_pipe_mode` |
+| [open] | `pipe` connects, relays stdin→dongle and dongle→stdout, and ends on stdin EOF or a link drop | `src/main.rs` `pipe` | none: needs Windows and a dongle |
 
 ## Library API
 
@@ -111,6 +123,23 @@ re-exports `scan_advertisers`, `connect`, `BleSerial`, `SerialLink`, the config 
 | [ok] | `Config` yields a `SerialConfig` (service/char/MTU) for `connect` and a `ScanFilter` (name/address) for `scan_advertisers` | `src/config.rs` `Config::serial`, `Config::scan_filter` | `config::tests::config_derives_serial_and_scan_filter` |
 | [open] | `connect(address, &SerialConfig)` opens the serial service, subscribes, and exposes byte read/write against a real dongle | `src/ble/win.rs` `connect`, `BleSerial` | none: needs Windows and a dongle |
 | [open] | On a non-Windows build the library items compile and return the WinRT requirement; `BleSerial` is uninhabited | `src/ble/unsupported.rs` | none: not cross-built here |
+
+## Future ideas (floated, not planned)
+
+Not scheduled, no obligation rows, nothing started — recorded so the idea is not lost. Each stays
+out of `RUST_OWNED` and `projecthub sync` until it is actually picked up.
+
+- **Visual patchbay GUI (optional extra).** A graphical front-end that represents each device as a
+  module on a canvas and lets the operator wire them together with virtual "patch cables", loosely
+  after a modular-rack routing view (see Reason's audio/CV routing:
+  <https://docs.reasonstudios.com/reason14/routing-audio-and-cv>). In dangle's terms a module would
+  be a scanned BLE dongle (from `scan`/`scan_advertisers`) or a sink (a TCP endpoint, a file, another
+  dongle), and a cable would be a `connect` + byte pipe between two endpoints — a visual way to build
+  the same bridges the CLI builds today. It would be a **separate crate/binary** layered on this
+  library's public API (`scan_advertisers`, `connect`, `bridge::run`), keeping this crate a headless
+  transport bridge; it must not pull a GUI toolkit or an async runtime into `dangle` itself. Open
+  questions: which GUI stack (and whether it honours the first-party-only policy), and whether the
+  patch graph is a throwaway demo or a saved document.
 
 ## Left unbuilt
 

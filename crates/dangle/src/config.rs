@@ -39,6 +39,29 @@ pub const NORDIC_UART_WRITE_UUID: u128 = 0x6e40_0002_b5a3_f393_e0a9_e50e_24dc_ca
 /// Nordic UART Service notify characteristic `6E400003-B5A3-F393-E0A9-E50E24DCCA9E` (dongle → host).
 pub const NORDIC_UART_NOTIFY_UUID: u128 = 0x6e40_0003_b5a3_f393_e0a9_e50e_24dc_ca9e;
 
+/// Microchip/ISSC Transparent UART service `49535343-FE7D-4AE5-8FA9-9FAFD205E455`.
+///
+/// Used by Microchip BM70/RN4870-class modules. The host writes to the RX characteristic
+/// ([`MICROCHIP_UART_WRITE_UUID`]) and subscribes to the TX characteristic
+/// ([`MICROCHIP_UART_NOTIFY_UUID`]); UUIDs are per Microchip's Transparent UART documentation.
+pub const MICROCHIP_UART_SERVICE_UUID: u128 = 0x4953_5343_fe7d_4ae5_8fa9_9faf_d205_e455;
+
+/// Microchip Transparent UART RX characteristic `49535343-8841-43F4-A8D4-ECBE34729BB3` (host →
+/// module, Write / Write-without-response).
+pub const MICROCHIP_UART_WRITE_UUID: u128 = 0x4953_5343_8841_43f4_a8d4_ecbe_3472_9bb3;
+
+/// Microchip Transparent UART TX characteristic `49535343-1E4D-4BD9-BA61-23C647249616` (module →
+/// host, Notify).
+pub const MICROCHIP_UART_NOTIFY_UUID: u128 = 0x4953_5343_1e4d_4bd9_ba61_23c6_4724_9616;
+
+/// HM-10 (CC2541) serial service, 16-bit `0xFFE0`. A single characteristic
+/// [`HM10_CHAR_UUID`] (`0xFFE1`) carries both directions (write-without-response and notify), so the
+/// `hm10` preset points the write and notify characteristics at the same UUID.
+pub const HM10_SERVICE_UUID: u128 = short_uuid(0xFFE0);
+
+/// HM-10 serial characteristic, 16-bit `0xFFE1` — write and notify on one characteristic.
+pub const HM10_CHAR_UUID: u128 = short_uuid(0xFFE1);
+
 /// Default TCP endpoint the bridge listens on. Loopback-only by default so the republished
 /// dongle is not exposed to the network without a deliberate choice.
 ///
@@ -68,6 +91,9 @@ pub enum Mode {
     Bridge,
     /// List the host radio and nearby BLE advertisers, then exit (the `scan` subcommand).
     Doctor,
+    /// Connect to the dongle and relay its serial stream on stdin/stdout, then exit when either
+    /// side closes (the `pipe` subcommand) — a connect-and-pipe demo that needs no TCP client.
+    Pipe,
 }
 
 /// Fully resolved configuration for one run of the bridge.
@@ -93,6 +119,9 @@ pub struct Config {
     pub scan_timeout: Duration,
     /// Optional capture of the relayed traffic.
     pub capture: Option<CaptureConfig>,
+    /// In [`Mode::Doctor`], emit the advertisers as JSON on stdout instead of the human table
+    /// (`--json`). Ignored in other modes.
+    pub json: bool,
 }
 
 /// Where and how to record the relayed traffic (`--capture`).
@@ -123,10 +152,16 @@ dangle - bridge a Bluetooth LE serial dongle's GATT serial stream to a TCP serve
 USAGE:
     dangle [OPTIONS]                 connect the dongle and run the TCP bridge
     dangle scan [OPTIONS]            list the host radio and nearby BLE advertisers, then exit
+    dangle pipe [OPTIONS]            connect the dongle and relay its serial on stdin/stdout
 
 The `scan` subcommand is a pre-flight doctor: it shows which BLE devices the host radio can see,
 their addresses and signal, and which one advertises the serial service (default FFF0) - so you
 can confirm the dongle is visible and read off the --mac/--service to use, without connecting.
+Add --json to `scan` to print the advertisers as JSON on stdout.
+
+The `pipe` subcommand is a connect-and-pipe demo: it connects to the dongle (same --name/--mac/
+--service selection as the bridge) and relays its serial stream between the dongle and this
+process's stdin/stdout, with no TCP server. It exits when stdin reaches EOF or the link drops.
 
 OPTIONS:
     --listen <ADDR>      TCP listen address            (env DANGLE_LISTEN) [default 127.0.0.1:35000]
@@ -139,14 +174,19 @@ OPTIONS:
     --scan-timeout <S>   seconds per scan attempt      (env DANGLE_SCAN)   [default 20]
     --capture <PATH>     record relayed traffic to PATH (env DANGLE_CAPTURE) [default: off]
     --capture-format <F> pcap | btsnoop | text         (env DANGLE_CAPTURE_FORMAT) [default pcap]
+    --json               (scan only) print advertisers as JSON on stdout
     -h, --help           print this help
 
 SERVICE PRESETS (--service <name>, a named profile that sets the service and, where the profile
 fixes them, the write/notify characteristics; --write/--notify still override):
-    fff0          FFF0-style serial service, characteristics by property; a common default on
-                  many ELM327/OBD dongles (aliases: obd, elm327)
-    nordic-uart   Nordic UART Service (6E400001-…): write 6E400002-…, notify 6E400003-…
-                  (aliases: nordic, nus)
+    fff0            FFF0-style serial service, characteristics by property; a common default on
+                    many ELM327/OBD dongles (aliases: obd, elm327)
+    nordic-uart     Nordic UART Service (6E400001-…): write 6E400002-…, notify 6E400003-…
+                    (aliases: nordic, nus)
+    microchip-uart  Microchip/ISSC Transparent UART (BM70/RN4870, 49535343-…): write …-8841-…,
+                    notify …-1E4D-… (aliases: microchip, issc, transparent-uart)
+    hm10            HM-10 / CC2541 serial (FFE0): write and notify share one characteristic FFE1
+                    (aliases: ffe0, cc2541)
 
 Instead of a preset name, --service / --write / --notify accept a UUID: a 4-hex-digit short form
 (e.g. FFF0) or a full 128-bit UUID (e.g. 0000fff0-0000-1000-8000-00805f9b34fb).";
@@ -372,6 +412,23 @@ pub const PRESETS: &[Preset] = &[
         notify_uuid: Some(NORDIC_UART_NOTIFY_UUID),
         description: "Nordic UART Service (6E400001-…): write 6E400002-…, notify 6E400003-…",
     },
+    Preset {
+        name: "microchip-uart",
+        aliases: &["microchip", "issc", "transparent-uart"],
+        service_uuid: MICROCHIP_UART_SERVICE_UUID,
+        write_uuid: Some(MICROCHIP_UART_WRITE_UUID),
+        notify_uuid: Some(MICROCHIP_UART_NOTIFY_UUID),
+        description: "Microchip/ISSC Transparent UART (BM70/RN4870, 49535343-…): write …-8841-…, \
+                      notify …-1E4D-…",
+    },
+    Preset {
+        name: "hm10",
+        aliases: &["ffe0", "cc2541"],
+        service_uuid: HM10_SERVICE_UUID,
+        write_uuid: Some(HM10_CHAR_UUID),
+        notify_uuid: Some(HM10_CHAR_UUID),
+        description: "HM-10 / CC2541 serial (FFE0): write and notify share one characteristic FFE1",
+    },
 ];
 
 /// Look up a built-in [`Preset`] by canonical name or alias (case-insensitive).
@@ -483,6 +540,64 @@ pub fn doctor_row(advert: &Advert, serial: u128) -> String {
     )
 }
 
+/// Escape a string for use inside a JSON string literal: the two required escapes (`"` and `\`), the
+/// common whitespace shortcuts, and `\u00XX` for the remaining C0 control characters. Advertised
+/// names come off the radio and may contain anything, so every control byte is escaped.
+fn json_escape(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render ranked advertisers as a JSON array, for `scan --json`.
+///
+/// Each element is an object `{"address","name","rssi","services":[…],"has_serial_service"}`.
+/// `address` and the `services` UUIDs use the same text forms as the human table ([`format_addr`]
+/// and [`uuid_label`] — a 16-bit short code when on the Bluetooth base, otherwise the dashed
+/// 128-bit form). The output is one line per advertiser so a reader can `grep`/stream it, and an
+/// empty input yields `[]`.
+#[must_use]
+pub fn adverts_json(rows: &[Advert]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("[");
+    for (i, a) in rows.iter().enumerate() {
+        out.push_str(if i == 0 { "\n  " } else { ",\n  " });
+        let services = a
+            .services
+            .iter()
+            .map(|u| format!("\"{}\"", uuid_label(*u)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(
+            out,
+            "{{\"address\": \"{}\", \"name\": \"{}\", \"rssi\": {}, \"services\": [{}], \"has_serial_service\": {}}}",
+            format_addr(a.address),
+            json_escape(&a.name),
+            a.rssi,
+            services,
+            a.has_serial_service
+        );
+    }
+    if !rows.is_empty() {
+        out.push('\n');
+    }
+    out.push(']');
+    out
+}
+
 /// Host and port an Android emulator's Wi-Fi OBD client should dial to reach `bound`.
 ///
 /// Returns `Some` when `bound` is `127.0.0.1` or IPv4 `0.0.0.0`. The emulator forwards
@@ -535,13 +650,18 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
-/// Consume a leading `scan`/`doctor` subcommand, if present, and return the resulting mode.
+/// Consume a leading `scan`/`doctor`/`pipe` subcommand, if present, and return the resulting mode.
 fn take_mode<I: Iterator<Item = String>>(it: &mut std::iter::Peekable<I>) -> Mode {
-    if matches!(it.peek().map(String::as_str), Some("scan" | "doctor")) {
-        it.next();
-        Mode::Doctor
-    } else {
-        Mode::Bridge
+    match it.peek().map(String::as_str) {
+        Some("scan" | "doctor") => {
+            it.next();
+            Mode::Doctor
+        }
+        Some("pipe") => {
+            it.next();
+            Mode::Pipe
+        }
+        _ => Mode::Bridge,
     }
 }
 
@@ -587,6 +707,7 @@ impl Config {
         let mut scan = env("DANGLE_SCAN");
         let mut capture = env("DANGLE_CAPTURE");
         let mut capture_format = env("DANGLE_CAPTURE_FORMAT");
+        let mut json = false;
 
         let mut it = args.into_iter().peekable();
         let mode = take_mode(&mut it);
@@ -607,6 +728,7 @@ impl Config {
                 "--scan-timeout" => scan = Some(take("--scan-timeout")?),
                 "--capture" => capture = Some(take("--capture")?),
                 "--capture-format" => capture_format = Some(take("--capture-format")?),
+                "--json" => json = true,
                 other => return Err(ConfigError(format!("unknown argument: {other:?}"))),
             }
         }
@@ -668,6 +790,7 @@ impl Config {
             max_write,
             scan_timeout,
             capture,
+            json,
         }))
     }
 }
@@ -1081,5 +1204,130 @@ mod tests {
         assert_eq!(serial.service_uuid, NORDIC_UART_SERVICE_UUID);
         assert_eq!(serial.write_uuid, Some(short_uuid(0xFFE1)));
         assert_eq!(serial.notify_uuid, Some(NORDIC_UART_NOTIFY_UUID));
+    }
+
+    #[test]
+    fn microchip_and_hm10_presets_carry_their_characteristics() {
+        let mc = find_preset("microchip-uart").unwrap();
+        assert_eq!(mc.service_uuid, MICROCHIP_UART_SERVICE_UUID);
+        assert_eq!(mc.write_uuid, Some(MICROCHIP_UART_WRITE_UUID));
+        assert_eq!(mc.notify_uuid, Some(MICROCHIP_UART_NOTIFY_UUID));
+        assert_eq!(find_preset("issc"), Some(mc));
+        assert_eq!(find_preset("transparent-uart"), Some(mc));
+        // The documented UUID text round-trips to the constants.
+        assert_eq!(
+            parse_uuid("49535343-fe7d-4ae5-8fa9-9fafd205e455").unwrap(),
+            MICROCHIP_UART_SERVICE_UUID
+        );
+        assert_eq!(
+            parse_uuid("49535343-8841-43f4-a8d4-ecbe34729bb3").unwrap(),
+            MICROCHIP_UART_WRITE_UUID
+        );
+        assert_eq!(
+            parse_uuid("49535343-1e4d-4bd9-ba61-23c647249616").unwrap(),
+            MICROCHIP_UART_NOTIFY_UUID
+        );
+
+        let hm = find_preset("hm10").unwrap();
+        assert_eq!(hm.service_uuid, short_uuid(0xFFE0));
+        // HM-10 shares one characteristic for both directions.
+        assert_eq!(hm.write_uuid, Some(short_uuid(0xFFE1)));
+        assert_eq!(hm.notify_uuid, Some(short_uuid(0xFFE1)));
+        assert_eq!(hm.write_uuid, hm.notify_uuid);
+        assert_eq!(find_preset("ffe0"), Some(hm));
+    }
+
+    #[test]
+    fn every_preset_name_and_alias_is_unique() {
+        let mut names: Vec<&str> = Vec::new();
+        for p in PRESETS {
+            names.push(p.name);
+            names.extend(p.aliases.iter().copied());
+        }
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            names.len(),
+            "duplicate preset name/alias: {names:?}"
+        );
+        // A preset name must not collide with a bare short UUID that parse_uuid would also accept.
+        for n in &names {
+            assert!(find_preset(n).is_some(), "{n} does not resolve");
+        }
+    }
+
+    #[test]
+    fn pipe_subcommand_sets_pipe_mode() {
+        let cfg = Config::from_args_and_env(["pipe".to_owned()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(cfg.mode, Mode::Pipe);
+        // The selection flags still parse after the subcommand.
+        let args = ["pipe", "--service", "hm10"].into_iter().map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+        assert_eq!(cfg.mode, Mode::Pipe);
+        assert_eq!(cfg.serial().service_uuid, short_uuid(0xFFE0));
+    }
+
+    #[test]
+    fn json_flag_defaults_off_and_is_set_by_scan_json() {
+        let plain = Config::from_args_and_env(std::iter::empty())
+            .unwrap()
+            .unwrap();
+        assert!(!plain.json);
+
+        let args = ["scan", "--json"].into_iter().map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+        assert_eq!(cfg.mode, Mode::Doctor);
+        assert!(cfg.json);
+    }
+
+    #[test]
+    fn adverts_json_empty_is_an_empty_array() {
+        assert_eq!(adverts_json(&[]), "[]");
+    }
+
+    #[test]
+    fn adverts_json_renders_rows_with_escaping() {
+        let rows = vec![
+            Advert {
+                address: 0x0000_AABB_CCDD_EEFF,
+                name: "OBD\"II\\link".to_owned(),
+                rssi: -63,
+                services: vec![DEFAULT_SERVICE_UUID, short_uuid(0x180A)],
+                has_serial_service: true,
+            },
+            Advert {
+                address: 0x0000_1122_3344_5566,
+                name: String::new(),
+                rssi: -90,
+                services: vec![],
+                has_serial_service: false,
+            },
+        ];
+        let json = adverts_json(&rows);
+        // Quotes and backslashes in the advertised name are escaped.
+        assert!(json.contains(r#""name": "OBD\"II\\link""#), "{json}");
+        assert!(json.contains(r#""address": "AA:BB:CC:DD:EE:FF""#), "{json}");
+        assert!(json.contains(r#""rssi": -63"#), "{json}");
+        assert!(json.contains(r#""services": ["FFF0", "180A"]"#), "{json}");
+        assert!(json.contains(r#""has_serial_service": true"#), "{json}");
+        // The second row has an empty name and no services.
+        assert!(
+            json.contains(r#""name": "", "rssi": -90, "services": []"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""has_serial_service": false"#), "{json}");
+        assert!(json.starts_with('['), "{json}");
+        assert!(json.ends_with(']'), "{json}");
+    }
+
+    #[test]
+    fn json_escape_covers_control_characters() {
+        assert_eq!(json_escape("a\tb\nc\rd"), "a\\tb\\nc\\rd");
+        assert_eq!(json_escape("\u{0001}"), "\\u0001");
+        assert_eq!(json_escape("plain"), "plain");
     }
 }

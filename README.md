@@ -51,9 +51,9 @@ OPTIONS:
     --listen <ADDR>      TCP listen address            (env DANGLE_LISTEN) [default 127.0.0.1:35000]
     --name <SUBSTR>      dongle name must contain      (env DANGLE_NAME)
     --mac <AA:BB:..>     dongle Bluetooth address      (env DANGLE_MAC)
-    --service <UUID>     serial GATT service UUID       (env DANGLE_SERVICE) [default FFF0]
-    --write <UUID>       write characteristic UUID     (env DANGLE_WRITE)  [default: by property]
-    --notify <UUID>      notify characteristic UUID    (env DANGLE_NOTIFY) [default: by property]
+    --service <PRESET|UUID>  serial GATT service        (env DANGLE_SERVICE) [default fff0]
+    --write <UUID>       write characteristic UUID     (env DANGLE_WRITE)  [default: preset/by property]
+    --notify <UUID>      notify characteristic UUID    (env DANGLE_NOTIFY) [default: preset/by property]
     --mtu <N>            max payload bytes per write   (env DANGLE_MTU)    [default 20]
     --scan-timeout <S>   seconds per scan attempt      (env DANGLE_SCAN)   [default 20]
     --capture <PATH>     record relayed traffic to PATH (env DANGLE_CAPTURE) [default: off]
@@ -61,12 +61,28 @@ OPTIONS:
     -h, --help           print this help
 ```
 
-A UUID may be a 4-hex short form (`FFF0`) or a full 128-bit UUID
-(`0000fff0-0000-1000-8000-00805f9b34fb`). A Bluetooth address is 12 hex digits, separators optional.
+A Bluetooth address is 12 hex digits, separators optional.
 
-`FFF0` is the **default** serial service, a common value — not a universal one. For a dongle that
-uses another service (a Nordic-UART clone, say), point `--service` / `--write` / `--notify` at its
-UUIDs, or rely on property-based characteristic discovery within the given service.
+### Choosing the serial profile
+
+The GATT serial service is a **first-class, user-selectable choice**, not a fixed OBD assumption.
+`--service` takes either a named preset or a raw UUID:
+
+| Preset | Aliases | Service | Write / Notify |
+|---|---|---|---|
+| `fff0` (default) | `obd`, `elm327` | `0xFFF0` | discovered by property |
+| `nordic-uart` | `nordic`, `nus` | `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` | `…0002-…` / `…0003-…` |
+
+A preset sets the service and, where the profile fixes them, the write/notify characteristics;
+`--write` / `--notify` still override per field. Instead of a preset name, `--service` /
+`--write` / `--notify` accept a UUID — a 4-hex short form (`FFF0`) or a full 128-bit UUID
+(`0000fff0-0000-1000-8000-00805f9b34fb`).
+
+`fff0` is the **default** profile, a common value — not a universal one: it is used by many
+ELM327/OBD dongles. For a dongle that matches neither preset, give `--service <uuid>` and, if it
+pins its characteristics, `--write` / `--notify`; otherwise the write/notify characteristics are
+discovered by property within the chosen service. See [`docs/ble-re.md`](docs/ble-re.md) for how the
+`fff0` default was chosen.
 
 By default the bridge binds **loopback only** (`127.0.0.1`), so the dongle is not exposed to the
 network until you choose a different `--listen` address. From the standard Android emulator that
@@ -112,10 +128,13 @@ Bluetooth framing in pcap/btsnoop is synthesized around GATT values; see
 
 ## Serial GATT profile
 
-The default GATT service is `0xFFF0` with the write/notify characteristics discovered by property.
-This matches the common BLE serial profile used by OBDLink-class and many other dongles; see
-[`docs/ble-re.md`](docs/ble-re.md) for how this default was chosen and for notes on other dongles
-(e.g. Nordic-UART clones), which the `--service` / `--write` / `--notify` overrides accommodate.
+The default profile (`--service fff0`) is GATT service `0xFFF0` with the write/notify characteristics
+discovered by property. This matches the common BLE serial profile used by OBDLink-class and many
+other dongles. A second built-in preset, `nordic-uart`, selects the Nordic UART Service and its fixed
+write/notify characteristics; any other dongle is reached with a raw `--service <uuid>` (plus
+`--write` / `--notify` if it pins its characteristics). See [Choosing the serial profile](#choosing-the-serial-profile)
+above for the preset table, and [`docs/ble-re.md`](docs/ble-re.md) for how the `fff0` default was
+chosen.
 
 ## Documentation
 

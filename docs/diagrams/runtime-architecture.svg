@@ -15,7 +15,7 @@
     .biarrow{stroke:#5a6672;stroke-width:1.6;fill:none;marker-end:url(#arr);marker-start:url(#arrS)}
   </style>
   <rect x="0" y="0" width="900" height="470" fill="#ffffff"/>
-  <text x="450" y="28" text-anchor="middle" class="b" font-size="16">obd-bridge runtime topology</text>
+  <text x="450" y="28" text-anchor="middle" class="b" font-size="16">dangle runtime topology</text>
 
   <!-- Client -->
   <rect x="20" y="175" width="160" height="110" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
@@ -31,7 +31,7 @@
 
   <!-- Host container -->
   <rect x="228" y="60" width="430" height="360" rx="10" fill="#f7fafc" stroke="#9aa7b4" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text x="443" y="84" text-anchor="middle" class="b">Host — obd-bridge.exe</text>
+  <text x="443" y="84" text-anchor="middle" class="b">Host — dangle.exe</text>
 
   <!-- TcpListener -->
   <rect x="255" y="100" width="376" height="46" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>

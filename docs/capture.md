@@ -4,12 +4,12 @@
 of a bespoke log. It is off by default.
 
 ```
-obd-bridge --capture run.pcap                          # pcap, link type 201 (default)
-obd-bridge --capture run.btsnoop --capture-format btsnoop
-obd-bridge --capture run.log --capture-format text
+dangle --capture run.pcap                             # pcap, link type 201 (default)
+dangle --capture run.btsnoop --capture-format btsnoop
+dangle --capture run.log --capture-format text
 ```
 
-Environment fallbacks: `OBD_BRIDGE_CAPTURE`, `OBD_BRIDGE_CAPTURE_FORMAT`. A flag wins. The file is
+Environment fallbacks: `DANGLE_CAPTURE`, `DANGLE_CAPTURE_FORMAT`. A flag wins. The file is
 created (truncated) at startup and stays open across TCP clients and BLE reconnects.
 
 ## The framing is synthesized

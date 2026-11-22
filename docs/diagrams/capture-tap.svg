@@ -15,7 +15,7 @@
     .tapa{stroke:#9a6b2a;stroke-width:1.6;fill:none;stroke-dasharray:5 4;marker-end:url(#arrD)}
   </style>
   <rect x="0" y="0" width="900" height="400" fill="#ffffff"/>
-  <text x="450" y="28" text-anchor="middle" class="b" font-size="16">obd-bridge capture tap (passive observer)</text>
+  <text x="450" y="28" text-anchor="middle" class="b" font-size="16">dangle capture tap (passive observer)</text>
 
   <rect x="20" y="130" width="130" height="90" rx="8" fill="#eef4fa" stroke="#4a6b8a" stroke-width="1.5"/>
   <text x="85" y="170" text-anchor="middle" class="t b">TCP client</text>

@@ -164,7 +164,7 @@ pub fn doctor(cfg: &Config) -> BridgeResult<()> {
 
     if rows.is_empty() {
         println!(
-            "no matching BLE advertisers seen. Is the adapter powered (plugged into the OBD port) \
+            "no matching BLE advertisers seen. Is the dongle powered (e.g. an OBD adapter plugged into the OBD port) \
              and in range? Pairing it once in Windows Bluetooth settings helps."
         );
     } else {

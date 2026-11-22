@@ -10,8 +10,8 @@ use std::time::Duration;
 use crate::capture::Format;
 
 /// The Bluetooth SIG base UUID `00000000-0000-1000-8000-00805F9B34FB`, into which a 16-bit
-/// "short" UUID is slotted at bits 96..=111. Recovered 16-bit assignments for the `OBDLink`
-/// family's BLE serial profile are in `docs/ble-re.md`.
+/// "short" UUID is slotted at bits 96..=111. How the default serial profile's 16-bit assignments
+/// were chosen (from an `OBDLink` adapter, as a worked example) is in `docs/ble-re.md`.
 const BLUETOOTH_BASE_UUID: u128 = 0x0000_0000_0000_1000_8000_0080_5f9b_34fb;
 
 /// Expand a 16-bit "short" Bluetooth UUID into its full 128-bit form.
@@ -20,12 +20,13 @@ pub const fn short_uuid(short: u16) -> u128 {
     BLUETOOTH_BASE_UUID | ((short as u128) << 96)
 }
 
-/// Default GATT service that carries the ELM327 serial stream on `OBDLink`-class BLE adapters
-/// (16-bit `0xFFF0`). Overridable because other adapters (e.g. Nordic-UART clones) differ.
+/// Default GATT service that carries the serial stream on `FFF0`-style BLE serial dongles
+/// (16-bit `0xFFF0`). A common default, not a universal one: override it for dongles that use
+/// another service (e.g. a Nordic-UART clone). See `docs/ble-re.md` for how this default was chosen.
 pub const DEFAULT_SERVICE_UUID: u128 = short_uuid(0xFFF0);
 
 /// Default TCP endpoint the bridge listens on. Loopback-only by default so the republished
-/// adapter is not exposed to the network without a deliberate choice.
+/// dongle is not exposed to the network without a deliberate choice.
 ///
 /// The standard Android emulator reaches this socket as [`EMULATOR_HOST`] on the same port.
 /// That address is the emulator's name for the host's IPv4 loopback; it is not a bind address.
@@ -49,9 +50,9 @@ pub const DEFAULT_SCAN_SECS: u64 = 20;
 /// What the binary should do this run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Scan for the configured adapter, connect, and run the TCP bridge (the default).
+    /// Scan for the configured dongle, connect, and run the TCP bridge (the default).
     Bridge,
-    /// List the host adapter and nearby BLE advertisers, then exit (the `scan` subcommand).
+    /// List the host radio and nearby BLE advertisers, then exit (the `scan` subcommand).
     Doctor,
 }
 
@@ -103,27 +104,27 @@ impl std::error::Error for ConfigError {}
 
 /// Short usage text, printed for `--help` or on a parse error.
 pub const USAGE: &str = "\
-obd-bridge - republish a Bluetooth LE ELM327/STN OBD adapter as an ELM327-over-TCP server
+dangle - bridge a Bluetooth LE serial dongle's GATT serial stream to a TCP server
 
 USAGE:
-    obd-bridge [OPTIONS]              connect the adapter and run the TCP bridge
-    obd-bridge scan [OPTIONS]         list the host adapter and nearby BLE advertisers, then exit
+    dangle [OPTIONS]                 connect the dongle and run the TCP bridge
+    dangle scan [OPTIONS]            list the host radio and nearby BLE advertisers, then exit
 
 The `scan` subcommand is a pre-flight doctor: it shows which BLE devices the host radio can see,
 their addresses and signal, and which one advertises the serial service (default FFF0) - so you
-can confirm the adapter is visible and read off the --mac/--service to use, without a vehicle.
+can confirm the dongle is visible and read off the --mac/--service to use, without connecting.
 
 OPTIONS:
-    --listen <ADDR>      TCP listen address            (env OBD_BRIDGE_LISTEN) [default 127.0.0.1:35000]
-    --name <SUBSTR>      adapter name must contain     (env OBD_BRIDGE_NAME)
-    --mac <AA:BB:..>     adapter Bluetooth address     (env OBD_BRIDGE_MAC)
-    --service <UUID>     serial GATT service UUID       (env OBD_BRIDGE_SERVICE) [default FFF0]
-    --write <UUID>       write characteristic UUID     (env OBD_BRIDGE_WRITE)  [default: by property]
-    --notify <UUID>      notify characteristic UUID    (env OBD_BRIDGE_NOTIFY) [default: by property]
-    --mtu <N>            max payload bytes per write   (env OBD_BRIDGE_MTU)    [default 20]
-    --scan-timeout <S>   seconds per scan attempt      (env OBD_BRIDGE_SCAN)   [default 20]
-    --capture <PATH>     record relayed traffic to PATH (env OBD_BRIDGE_CAPTURE) [default: off]
-    --capture-format <F> pcap | btsnoop | text         (env OBD_BRIDGE_CAPTURE_FORMAT) [default pcap]
+    --listen <ADDR>      TCP listen address            (env DANGLE_LISTEN) [default 127.0.0.1:35000]
+    --name <SUBSTR>      adapter name must contain     (env DANGLE_NAME)
+    --mac <AA:BB:..>     adapter Bluetooth address     (env DANGLE_MAC)
+    --service <UUID>     serial GATT service UUID       (env DANGLE_SERVICE) [default FFF0]
+    --write <UUID>       write characteristic UUID     (env DANGLE_WRITE)  [default: by property]
+    --notify <UUID>      notify characteristic UUID    (env DANGLE_NOTIFY) [default: by property]
+    --mtu <N>            max payload bytes per write   (env DANGLE_MTU)    [default 20]
+    --scan-timeout <S>   seconds per scan attempt      (env DANGLE_SCAN)   [default 20]
+    --capture <PATH>     record relayed traffic to PATH (env DANGLE_CAPTURE) [default: off]
+    --capture-format <F> pcap | btsnoop | text         (env DANGLE_CAPTURE_FORMAT) [default pcap]
     -h, --help           print this help
 
 A UUID may be a 4-hex-digit short form (e.g. FFF0) or a full 128-bit UUID
@@ -262,8 +263,8 @@ impl ScanFilter {
 }
 
 /// The GATT parameters needed to open and drive the serial service: the subset of [`Config`] that
-/// the connect path uses. `Default` is the `OBDLink`-class profile (serial service `0xFFF0`,
-/// write/notify characteristics discovered by property, 20-byte writes).
+/// the connect path uses. `Default` is the common `FFF0`-style serial profile (serial service
+/// `0xFFF0`, write/notify characteristics discovered by property, 20-byte writes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialConfig {
     /// GATT service UUID carrying the serial stream (128-bit).
@@ -450,16 +451,16 @@ impl Config {
     where
         I: IntoIterator<Item = String>,
     {
-        let mut listen = env("OBD_BRIDGE_LISTEN").unwrap_or_else(|| DEFAULT_LISTEN.to_owned());
-        let mut name_filter = env("OBD_BRIDGE_NAME");
-        let mut mac = env("OBD_BRIDGE_MAC");
-        let mut service = env("OBD_BRIDGE_SERVICE");
-        let mut write = env("OBD_BRIDGE_WRITE");
-        let mut notify = env("OBD_BRIDGE_NOTIFY");
-        let mut mtu = env("OBD_BRIDGE_MTU");
-        let mut scan = env("OBD_BRIDGE_SCAN");
-        let mut capture = env("OBD_BRIDGE_CAPTURE");
-        let mut capture_format = env("OBD_BRIDGE_CAPTURE_FORMAT");
+        let mut listen = env("DANGLE_LISTEN").unwrap_or_else(|| DEFAULT_LISTEN.to_owned());
+        let mut name_filter = env("DANGLE_NAME");
+        let mut mac = env("DANGLE_MAC");
+        let mut service = env("DANGLE_SERVICE");
+        let mut write = env("DANGLE_WRITE");
+        let mut notify = env("DANGLE_NOTIFY");
+        let mut mtu = env("DANGLE_MTU");
+        let mut scan = env("DANGLE_SCAN");
+        let mut capture = env("DANGLE_CAPTURE");
+        let mut capture_format = env("DANGLE_CAPTURE_FORMAT");
 
         let mut it = args.into_iter().peekable();
         let mode = take_mode(&mut it);

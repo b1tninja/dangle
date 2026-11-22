@@ -1,21 +1,21 @@
 [package]
-name = "obd-bridge"
+name = "dangle"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Host-side bridge that republishes a Bluetooth LE ELM327/STN OBD adapter as an ELM327-over-TCP server"
+description = "Host-side adapter that bridges a Bluetooth LE serial dongle's GATT serial service to a byte stream and a TCP server"
 readme = "../../README.md"
 publish = false
 
 # A library crate so sibling crates (e.g. `voltkit`) can link the host-OS BLE scan/connect API
 # in-process, plus a thin binary that is the TCP bridge and the `scan` doctor CLI built on it.
 [lib]
-name = "obd_bridge"
+name = "dangle"
 path = "src/lib.rs"
 
 [[bin]]
-name = "obd-bridge"
+name = "dangle"
 path = "src/main.rs"
 
 [lints]

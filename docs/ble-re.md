@@ -1,9 +1,11 @@
-# Adapter BLE profile — how it was recovered
+# Default serial GATT profile — how it was chosen
 
-The default GATT UUIDs this bridge uses were recovered statically from the **OBDLink** companion
-app (which also backs OBDFusion; both are OCTech products), not guessed. This note records the
-method and the result so the defaults are auditable and so other adapters can be configured against
-the `--service` / `--write` / `--notify` overrides.
+`dangle`'s default GATT UUIDs (`FFF0` service, characteristics by property) were recovered
+statically from the **OBDLink** companion app (which also backs OBDFusion; both are OCTech
+products), not guessed. OBDLink is used here as a worked example of a common BLE serial dongle; the
+same `FFF0`-style profile is used by many other dongles. This note records the method and the result
+so the defaults are auditable and so other dongles can be configured against the `--service` /
+`--write` / `--notify` overrides.
 
 No app was installed or run during this: the APK was read as data and decompiled statically.
 
@@ -35,7 +37,7 @@ Classic "FFF0" BLE serial profile, on the Bluetooth base UUID
 | Characteristic     | 0xFFF2 | `0000fff2-0000-1000-8000-00805f9b34fb` |
 
 The classic-Bluetooth Serial Port Profile (`00001101-…`, RFCOMM) is also present, for non-BLE
-adapters, and is not used by this bridge.
+dongles, and is not used by this bridge.
 
 ### Write vs notify is decided by property, not by number
 
@@ -43,27 +45,30 @@ The app does **not** hard-code which characteristic is write and which is notify
 `DiscoveredTxCharacteristic` / `DiscoveredRxCharacteristic` fields — i.e. it discovers the serial
 characteristics by GATT property at connect time. This bridge does the same:
 
-- the **notify** characteristic (adapter → host, "Rx" from the client's view) is the one with the
+- the **notify** characteristic (dongle → host, "Rx" from the client's view) is the one with the
   **Notify** (or Indicate) property;
-- the **write** characteristic (host → adapter, "Tx") is the one with **Write** or
+- the **write** characteristic (host → dongle, "Tx") is the one with **Write** or
   **WriteWithoutResponse** (the latter is preferred when available).
 
 For the FFF0 profile the usual assignment is FFF1 = notify, FFF2 = write, but the property-based
 selection does not depend on that. Explicit `--write` / `--notify` UUIDs override the discovery when
-an adapter needs it.
+a dongle needs it.
 
-## Other adapters
+## Other dongles
 
-The app's strings name the OBDLink MX+, MX, CX, LX, SX and EX adapters and the STN1100 / STN2320
-chips ("Multiprotocol OBD II to UART Interpreter" — an ELM327-compatible AT layer over a UART that
-the BLE characteristic tunnels). No Nordic-UART service (`6e400001-…`) appears in this APK, but some
-other adapters (e.g. vLinker MC/MS) use it; point `--service`/`--write`/`--notify` at those UUIDs for
-such adapters, or rely on property-based discovery within the given service.
+The `FFF0` service and property-based discovery cover OBDLink-class adapters and many other serial
+dongles, but not all. The OBDLink app's strings name the OBDLink MX+, MX, CX, LX, SX and EX adapters
+and the STN1100 / STN2320 chips ("Multiprotocol OBD II to UART Interpreter" — an ELM327-compatible
+AT layer over a UART that the BLE characteristic tunnels). No Nordic-UART service (`6e400001-…`)
+appears in that APK, but some other dongles (e.g. vLinker MC/MS) use it; point
+`--service`/`--write`/`--notify` at those UUIDs for such dongles, or rely on property-based discovery
+within the given service.
 
-## ELM327 transport (reference only — the bridge does not parse this)
+## Serial transport (reference only — the bridge does not parse this)
 
-The stream is ASCII command/response lines, each command terminated by `\r`, each response ending at
-the `>` prompt. A client configures the adapter with commands such as `ATZ`, `ATE0`, `ATL0`, `ATH0`,
-`ATS0`, `ATSP6`, `ATSH<id>`, `ATCRA<id>`, plus the ISO 15765 flow-control programming commands
-(`ATFCSH` / `ATFCSD` / `ATFCSM`). All of that is the client's responsibility; the bridge relays the
-bytes untouched. The full protocol context lives in the `volt` repo's `docs/OBD-CONFIG.md`.
+`dangle` relays bytes untouched, so what the stream *means* is the client's concern. For the
+motivating OBD case the stream is ASCII ELM327 command/response lines, each command terminated by
+`\r`, each response ending at the `>` prompt. A client configures such an adapter with commands like
+`ATZ`, `ATE0`, `ATL0`, `ATH0`, `ATS0`, `ATSP6`, `ATSH<id>`, `ATCRA<id>`, plus the ISO 15765
+flow-control programming commands (`ATFCSH` / `ATFCSD` / `ATFCSM`). All of that is the client's
+responsibility; the bridge relays the bytes untouched.

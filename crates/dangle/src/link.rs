@@ -8,7 +8,7 @@
 
 use crate::BridgeResult;
 
-/// The write half of a serial link to an OBD adapter.
+/// The write half of a serial link to a BLE serial dongle.
 pub trait SerialLink: Sync {
     /// Write `data` to the adapter. Implementations split it into link-sized writes (see
     /// [`write_chunked`]).

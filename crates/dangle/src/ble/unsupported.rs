@@ -13,7 +13,7 @@ use crate::link::SerialLink;
 
 /// The platform requirement, returned by every call on a non-Windows host.
 fn unsupported() -> Box<dyn std::error::Error + Send + Sync + 'static> {
-    "obd-bridge BLE requires Windows: the Bluetooth LE backend uses WinRT GATT".into()
+    "dangle BLE requires Windows: the Bluetooth LE backend uses WinRT GATT".into()
 }
 
 /// A connected BLE adapter exposed as a byte sink — the Windows [`super::win::BleSerial`] on

@@ -338,7 +338,7 @@ impl Tap {
             return;
         };
         if let Err(e) = sink.record(ts, dir, data) {
-            eprintln!("obd-bridge: capture write failed ({e}); capture disabled");
+            eprintln!("dangle: capture write failed ({e}); capture disabled");
             *guard = None;
         }
     }

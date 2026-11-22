@@ -1,4 +1,4 @@
-//! Host-OS Bluetooth LE access to the OBD adapter: scan for advertisers and open the serial GATT
+//! Host-OS Bluetooth LE access to the serial dongle: scan for advertisers and open the serial GATT
 //! service as a [`SerialLink`](crate::link::SerialLink) byte pipe.
 //!
 //! The real backend is Windows-only (`WinRT` `Windows.Devices.Bluetooth`, in the private `win`

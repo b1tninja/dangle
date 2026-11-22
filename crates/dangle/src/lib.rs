@@ -1,27 +1,32 @@
-//! `obd-bridge`: host-OS Bluetooth LE access to an ELM327/STN OBD adapter, as both a library and a
-//! binary.
+//! `dangle`: host-OS Bluetooth LE access to a serial dongle ("a dongle adapter"), as both a
+//! library and a binary.
 //!
-//! The binary (`src/main.rs`) scans for a BLE adapter with the host radio and republishes it as an
-//! ELM327-over-TCP server, so a tool that can reach a TCP endpoint but not host Bluetooth (e.g. an
-//! Android emulator) can drive a real BLE adapter; it also has a `scan` doctor subcommand.
+//! A *dangle* is any BLE peripheral that exposes a serial stream over a GATT serial service
+//! (a Nordic-UART-style or FFF0-style profile). The common motivating case is an OBD adapter such
+//! as an `OBDLink` MX, but nothing here is OBD-specific: the crate scans for such a peripheral,
+//! connects to its serial service, and moves raw bytes to and from it.
+//!
+//! The binary (`src/main.rs`) scans for a dongle with the host radio and republishes its serial
+//! stream as a TCP server, so a tool that can reach a TCP endpoint but not host Bluetooth (e.g. an
+//! Android emulator) can drive a real BLE dongle; it also has a `scan` doctor subcommand.
 //!
 //! This library exposes the same host-OS BLE building blocks so a sibling crate (e.g. `voltkit`)
-//! can scan and connect to the adapter **in-process**, without spawning the binary:
+//! can scan and connect to the dongle **in-process**, without spawning the binary:
 //!
 //! - [`scan_advertisers`] runs the `WinRT` advertisement watcher and returns typed [`Advert`] rows
 //!   (address, name, RSSI, advertised service UUIDs, and a serial-service flag), serial-service
 //!   first then strongest signal — the same data the `scan` doctor prints.
-//! - [`connect`] opens the adapter's serial GATT service (default `0xFFF0`), subscribes to
-//!   notifications, and returns a [`BleSerial`] byte sink plus a [`std::sync::mpsc::Receiver`] of
-//!   the bytes the adapter sends back.
+//! - [`connect`] opens the dongle's serial GATT service (default `0xFFF0`, a common value you can
+//!   override for other dongles), subscribes to notifications, and returns a [`BleSerial`] byte
+//!   sink plus a [`std::sync::mpsc::Receiver`] of the bytes the dongle sends back.
 //! - [`SerialLink`] / [`write_chunked`] are the transport abstraction, and [`bridge::run`] is the
 //!   byte pipe the binary uses to relay a TCP client to a [`SerialLink`].
 //!
 //! # Scope
 //!
-//! This crate is a **transport bridge only**: it moves raw bytes between a client and the adapter's
-//! serial characteristics. It performs no OBD/UDS parsing and issues no vehicle writes; that logic
-//! belongs to the client that drives the ELM327 session.
+//! This crate is a **transport bridge only**: it moves raw bytes between a client and the dongle's
+//! serial characteristics. It parses nothing on the wire and issues no writes of its own; any
+//! protocol (an ELM327/OBD session, for example) is the client's responsibility.
 //!
 //! # Platforms
 //!

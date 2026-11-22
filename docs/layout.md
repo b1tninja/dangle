@@ -4,7 +4,7 @@ A Cargo workspace. The root `Cargo.toml` holds shared package metadata and the l
 member lives in `crates/<name>/` and inherits both with `workspace = true`, mirroring the sibling
 `piv-card` project.
 
-- `crates/obd-bridge/` — a library (`[lib] obd_bridge`) plus a thin binary (`[[bin]] obd-bridge`)
+- `crates/dangle/` — a library (`[lib] dangle`) plus a thin binary (`[[bin]] dangle`)
   built on it, so a sibling crate (e.g. `voltkit`) can link the host-OS BLE scan/connect API
   in-process instead of spawning the binary.
   - `src/lib.rs` — the library root: declares the modules below and re-exports the public API
@@ -41,7 +41,7 @@ Windows targets (`[target.'cfg(windows)'.dependencies]`). The enabled WinRT feat
 - `Foundation`, `Foundation_Collections` — `IAsyncOperation`, `TypedEventHandler`,
   `EventRegistrationToken`, and the collection views GATT queries return.
 - `Devices_Bluetooth`, `Devices_Bluetooth_Advertisement` — `BluetoothLEDevice` and the
-  advertisement watcher used to discover an adapter.
+  advertisement watcher used to discover a dongle.
 - `Devices_Bluetooth_GenericAttributeProfile` — the GATT service/characteristic types.
 - `Storage_Streams` — `DataReader`/`DataWriter` to move bytes in and out of GATT `IBuffer` values.
 

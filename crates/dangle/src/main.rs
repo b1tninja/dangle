@@ -1,22 +1,23 @@
-//! `obd-bridge` binary: connect to a Bluetooth LE ELM327/STN OBD adapter with the host's radio and
-//! republish it as an ELM327-over-TCP server, so a tool that can reach a TCP endpoint but not host
-//! Bluetooth (e.g. an Android emulator) can drive a real BLE adapter.
+//! `dangle` binary: connect to a Bluetooth LE serial dongle with the host's radio and republish
+//! its GATT serial stream as a TCP server, so a tool that can reach a TCP endpoint but not host
+//! Bluetooth (e.g. an Android emulator) can drive a real BLE dongle. A typical dongle is an OBD
+//! adapter such as an `OBDLink` MX, but the bridge is protocol-agnostic: it moves bytes.
 //!
-//! This is a thin wrapper over the `obd_bridge` library: the TCP accept loop, the BLE (re)connect
+//! This is a thin wrapper over the `dangle` library: the TCP accept loop, the BLE (re)connect
 //! loop, and the `scan` doctor subcommand, all built on the library's host-OS BLE and byte-pipe
-//! building blocks. It is a transport bridge only: it moves raw ASCII command/response bytes between
-//! the TCP client and the adapter's BLE serial characteristics, with no OBD/UDS logic of its own.
+//! building blocks. It is a transport bridge only: it moves raw bytes between the TCP client and
+//! the dongle's BLE serial characteristics, parsing none of them.
 
 use std::process::ExitCode;
 
-use obd_bridge::BridgeResult;
-use obd_bridge::config;
+use dangle::BridgeResult;
+use dangle::config;
 
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("obd-bridge: {e}");
+            eprintln!("dangle: {e}");
             ExitCode::FAILURE
         }
     }
@@ -27,7 +28,7 @@ fn run() -> BridgeResult<()> {
     use std::net::TcpListener;
     use std::time::Duration;
 
-    use obd_bridge::{ble, bridge, capture};
+    use dangle::{ble, bridge, capture};
 
     let cfg = match config::Config::from_args_and_env(std::env::args().skip(1)) {
         Ok(Some(cfg)) => cfg,
@@ -48,7 +49,7 @@ fn run() -> BridgeResult<()> {
     let listener = TcpListener::bind(cfg.listen)?;
     let bound = listener.local_addr()?;
     for line in config::listen_notice(bound).lines() {
-        eprintln!("obd-bridge: {line}");
+        eprintln!("dangle: {line}");
     }
 
     // The tap outlives BLE reconnects and TCP clients, so one file holds the whole run. A tap that
@@ -58,11 +59,7 @@ fn run() -> BridgeResult<()> {
         Some(c) => {
             let tap = capture::Tap::create(&c.path, c.format, cfg.max_write)
                 .map_err(|e| format!("cannot create capture file {}: {e}", c.path.display()))?;
-            eprintln!(
-                "obd-bridge: capturing {:?} to {}",
-                c.format,
-                c.path.display()
-            );
+            eprintln!("dangle: capturing {:?} to {}", c.format, c.path.display());
             tap
         }
         None => capture::Tap::disabled(),
@@ -73,29 +70,29 @@ fn run() -> BridgeResult<()> {
         let (ble, notify_rx) = match establish(&cfg) {
             Ok(pair) => pair,
             Err(e) => {
-                eprintln!("obd-bridge: adapter not ready: {e}; retrying in 3s");
+                eprintln!("dangle: dongle not ready: {e}; retrying in 3s");
                 std::thread::sleep(Duration::from_secs(3));
                 continue;
             }
         };
-        eprintln!("obd-bridge: adapter connected; waiting for a TCP client");
+        eprintln!("dangle: dongle connected; waiting for a TCP client");
 
         // Inner loop: serve clients one at a time while the adapter stays connected.
         loop {
             let (stream, peer) = match listener.accept() {
                 Ok(pair) => pair,
                 Err(e) => {
-                    eprintln!("obd-bridge: accept error: {e}");
+                    eprintln!("dangle: accept error: {e}");
                     continue;
                 }
             };
             let _ = stream.set_nodelay(true);
-            eprintln!("obd-bridge: client {peer} connected");
+            eprintln!("dangle: client {peer} connected");
 
             match bridge::run(stream, &ble, &notify_rx, &tap) {
-                Ok(()) => eprintln!("obd-bridge: client {peer} disconnected"),
+                Ok(()) => eprintln!("dangle: client {peer} disconnected"),
                 Err(e) => {
-                    eprintln!("obd-bridge: BLE link lost ({e}); reconnecting adapter");
+                    eprintln!("dangle: BLE link lost ({e}); reconnecting dongle");
                     break; // drop `ble`, reconnect in the outer loop
                 }
             }
@@ -107,16 +104,13 @@ fn run() -> BridgeResult<()> {
 #[cfg(windows)]
 fn establish(
     cfg: &config::Config,
-) -> BridgeResult<(
-    obd_bridge::ble::BleSerial,
-    std::sync::mpsc::Receiver<Vec<u8>>,
-)> {
-    use obd_bridge::ble;
+) -> BridgeResult<(dangle::ble::BleSerial, std::sync::mpsc::Receiver<Vec<u8>>)> {
+    use dangle::ble;
 
     let (addr, name) = ble::scan_for_adapter(cfg)?;
     let shown = if name.is_empty() { "<unnamed>" } else { &name };
     eprintln!(
-        "obd-bridge: found adapter {shown} at {}",
+        "dangle: found dongle {shown} at {}",
         config::format_addr(addr)
     );
     ble::connect(addr, &cfg.serial())
@@ -130,6 +124,6 @@ fn run() -> BridgeResult<()> {
             println!("{}", config::USAGE);
             Ok(())
         }
-        _ => Err("obd-bridge requires Windows: the Bluetooth LE backend uses WinRT GATT".into()),
+        _ => Err("dangle requires Windows: the Bluetooth LE backend uses WinRT GATT".into()),
     }
 }

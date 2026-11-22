@@ -1,6 +1,6 @@
 # Instructions for coding agents
 
-`obd-bridge` is a Rust workspace (edition 2024, MSRV 1.85), mirroring the sibling `piv-card`
+`dangle` is a Rust workspace (edition 2024, MSRV 1.85), mirroring the sibling `piv-card`
 project's structure and first-party-dependencies-only policy. Read `docs/layout.md` before adding
 modules.
 
@@ -17,10 +17,12 @@ Run these from this directory; all must pass before a change is done.
 
 ## Scope
 
-This crate is a **transport bridge only**: it relays raw bytes between a TCP client and a Bluetooth
-LE OBD adapter's serial GATT characteristics. It must not grow OBD/UDS parsing or any vehicle-write
-logic — that belongs to the client. Keep `ble.rs` to connection management and `bridge.rs` to the
-byte pipe.
+`dangle` ("a dongle adapter") is a **transport bridge only**: it relays raw bytes between a client
+and a Bluetooth LE serial dongle's serial GATT characteristics. A dongle is any BLE peripheral that
+exposes a serial stream over a GATT serial service (a Nordic-UART-style or FFF0-style profile); the
+motivating case is an OBD adapter such as an OBDLink MX, but nothing here is OBD-specific. The crate
+must not grow protocol parsing (ELM327, UDS, OBD) or any write logic of its own — that belongs to the
+client. Keep `ble.rs` to connection management and `bridge.rs` to the byte pipe.
 
 ## Invariants
 
@@ -31,9 +33,9 @@ byte pipe.
   third-party BLE stack (no btleplug) and no async runtime. Do not add a dependency without saying
   why in the commit message.
 - Default to the least-exposed choice: the TCP server binds loopback by default.
-- No identifying detail of a real adapter, vehicle, person or machine in the tree: no Bluetooth
-  addresses, VINs, serial numbers or local paths. The recovered GATT UUIDs in `docs/ble-re.md` are
-  generic profile constants and are fine.
+- No identifying detail of a real dongle, vehicle, person or machine in the tree: no Bluetooth
+  addresses, VINs, serial numbers or local paths. The GATT UUIDs in `docs/ble-re.md` are generic
+  profile constants and are fine.
 - Read a standard before citing it, and cite it by section. Never state normative wording from
   memory.
 - Write scratch output outside the repository; `git add -A` will commit it.

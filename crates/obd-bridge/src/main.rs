@@ -1,28 +1,16 @@
-//! `obd-bridge`: connect to a Bluetooth LE ELM327/STN OBD adapter with the host's radio and
+//! `obd-bridge` binary: connect to a Bluetooth LE ELM327/STN OBD adapter with the host's radio and
 //! republish it as an ELM327-over-TCP server, so a tool that can reach a TCP endpoint but not host
 //! Bluetooth (e.g. an Android emulator) can drive a real BLE adapter.
 //!
-//! This binary is a transport bridge only: it moves raw ASCII command/response bytes between the TCP
-//! client and the adapter's BLE serial characteristics. It performs no OBD/UDS logic and issues no
-//! vehicle writes of its own.
-
-// The relay and link trait are platform-independent (and tested everywhere); only the Windows
-// build has a backend that uses them outside tests.
-#[cfg_attr(not(windows), allow(dead_code))]
-mod bridge;
-#[cfg_attr(not(windows), allow(dead_code))]
-mod capture;
-mod config;
-#[cfg_attr(not(windows), allow(dead_code))]
-mod link;
-
-#[cfg(windows)]
-mod ble;
+//! This is a thin wrapper over the `obd_bridge` library: the TCP accept loop, the BLE (re)connect
+//! loop, and the `scan` doctor subcommand, all built on the library's host-OS BLE and byte-pipe
+//! building blocks. It is a transport bridge only: it moves raw ASCII command/response bytes between
+//! the TCP client and the adapter's BLE serial characteristics, with no OBD/UDS logic of its own.
 
 use std::process::ExitCode;
 
-/// Crate-wide fallible result with a boxed, thread-safe error.
-pub type BridgeResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+use obd_bridge::BridgeResult;
+use obd_bridge::config;
 
 fn main() -> ExitCode {
     match run() {
@@ -38,6 +26,8 @@ fn main() -> ExitCode {
 fn run() -> BridgeResult<()> {
     use std::net::TcpListener;
     use std::time::Duration;
+
+    use obd_bridge::{ble, bridge, capture};
 
     let cfg = match config::Config::from_args_and_env(std::env::args().skip(1)) {
         Ok(Some(cfg)) => cfg,
@@ -117,14 +107,19 @@ fn run() -> BridgeResult<()> {
 #[cfg(windows)]
 fn establish(
     cfg: &config::Config,
-) -> BridgeResult<(ble::BleSerial, std::sync::mpsc::Receiver<Vec<u8>>)> {
+) -> BridgeResult<(
+    obd_bridge::ble::BleSerial,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+)> {
+    use obd_bridge::ble;
+
     let (addr, name) = ble::scan_for_adapter(cfg)?;
     let shown = if name.is_empty() { "<unnamed>" } else { &name };
     eprintln!(
         "obd-bridge: found adapter {shown} at {}",
         config::format_addr(addr)
     );
-    ble::connect(cfg, addr)
+    ble::connect(addr, &cfg.serial())
 }
 
 #[cfg(not(windows))]

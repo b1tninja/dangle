@@ -46,9 +46,20 @@ pub const DEFAULT_MAX_WRITE: usize = 20;
 /// Default time to scan for a matching adapter before giving up one attempt.
 pub const DEFAULT_SCAN_SECS: u64 = 20;
 
+/// What the binary should do this run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Scan for the configured adapter, connect, and run the TCP bridge (the default).
+    Bridge,
+    /// List the host adapter and nearby BLE advertisers, then exit (the `scan` subcommand).
+    Doctor,
+}
+
 /// Fully resolved configuration for one run of the bridge.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// What to do this run: run the bridge, or just scan and report.
+    pub mode: Mode,
     /// Address the TCP server binds to.
     pub listen: SocketAddr,
     /// Case-insensitive substring the adapter's advertised name must contain, if set.
@@ -95,7 +106,12 @@ pub const USAGE: &str = "\
 obd-bridge - republish a Bluetooth LE ELM327/STN OBD adapter as an ELM327-over-TCP server
 
 USAGE:
-    obd-bridge [OPTIONS]
+    obd-bridge [OPTIONS]              connect the adapter and run the TCP bridge
+    obd-bridge scan [OPTIONS]         list the host adapter and nearby BLE advertisers, then exit
+
+The `scan` subcommand is a pre-flight doctor: it shows which BLE devices the host radio can see,
+their addresses and signal, and which one advertises the serial service (default FFF0) - so you
+can confirm the adapter is visible and read off the --mac/--service to use, without a vehicle.
 
 OPTIONS:
     --listen <ADDR>      TCP listen address            (env OBD_BRIDGE_LISTEN) [default 127.0.0.1:35000]
@@ -145,6 +161,199 @@ pub fn parse_mac(s: &str) -> Result<u64, ConfigError> {
     }
     u64::from_str_radix(&hex, 16)
         .map_err(|_| ConfigError(format!("invalid Bluetooth address: {s:?}")))
+}
+
+/// Format a 48-bit Bluetooth address as `AA:BB:CC:DD:EE:FF`.
+#[must_use]
+pub fn format_addr(addr: u64) -> String {
+    let b = addr.to_be_bytes();
+    format!(
+        "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        b[2], b[3], b[4], b[5], b[6], b[7]
+    )
+}
+
+/// Render a 128-bit UUID as its 4-hex short form when it sits on the Bluetooth SIG base,
+/// otherwise as the full dashed 36-character form.
+#[must_use]
+pub fn uuid_label(u: u128) -> String {
+    // Clear the 16-bit "short" slot (bits 96..=111); if the rest equals the base, it is a short UUID.
+    let base_mask: u128 = !(0xffff_u128 << 96);
+    if (u & base_mask) == BLUETOOTH_BASE_UUID {
+        format!("{:04X}", (u >> 96) & 0xffff)
+    } else {
+        let b = u.to_be_bytes();
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            b[0],
+            b[1],
+            b[2],
+            b[3],
+            b[4],
+            b[5],
+            b[6],
+            b[7],
+            b[8],
+            b[9],
+            b[10],
+            b[11],
+            b[12],
+            b[13],
+            b[14],
+            b[15]
+        )
+    }
+}
+
+/// Accumulator for one advertiser while a scan is in progress: the strongest signal and the union
+/// of names/services seen across its advertisement packets. [`rank_advertisers`] turns a set of
+/// these into the public [`Advert`] rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seen {
+    /// 48-bit Bluetooth device address.
+    pub addr: u64,
+    /// Advertised local name, empty when none was advertised.
+    pub name: String,
+    /// Strongest signal seen, in dBm.
+    pub rssi: i16,
+    /// Advertised 128-bit service UUIDs.
+    pub services: Vec<u128>,
+}
+
+/// A Bluetooth LE advertiser returned by a scan, with the serial-service flag already resolved.
+///
+/// This is the typed result [`crate::ble::scan_advertisers`] produces (the same data the `scan`
+/// doctor prints, but as data rather than stdout). A consumer such as `voltkit` reads these to
+/// present a chooser and then calls [`crate::ble::connect`] with the chosen [`Advert::address`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Advert {
+    /// 48-bit Bluetooth device address, as [`format_addr`] renders it.
+    pub address: u64,
+    /// Advertised local name, empty when none was advertised.
+    pub name: String,
+    /// Strongest signal seen during the scan, in dBm (higher is closer).
+    pub rssi: i16,
+    /// Advertised 128-bit service UUIDs.
+    pub services: Vec<u128>,
+    /// Whether [`services`](Self::services) includes the serial service the scan looked for
+    /// (default [`DEFAULT_SERVICE_UUID`], 16-bit `0xFFF0`).
+    pub has_serial_service: bool,
+}
+
+/// Filters applied to a scan: an optional case-insensitive name substring and an optional exact
+/// device address. `Default` (both `None`) matches every advertiser.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanFilter {
+    /// Keep only advertisers whose local name contains this substring (case-insensitive).
+    pub name_contains: Option<String>,
+    /// Keep only the advertiser with this exact 48-bit address.
+    pub address: Option<u64>,
+}
+
+impl ScanFilter {
+    /// Whether an advertiser with `name`/`addr` passes this filter.
+    #[must_use]
+    pub fn matches(&self, name: &str, addr: u64) -> bool {
+        self.name_contains
+            .as_deref()
+            .is_none_or(|n| name.to_lowercase().contains(&n.to_lowercase()))
+            && self.address.is_none_or(|a| a == addr)
+    }
+}
+
+/// The GATT parameters needed to open and drive the serial service: the subset of [`Config`] that
+/// the connect path uses. `Default` is the `OBDLink`-class profile (serial service `0xFFF0`,
+/// write/notify characteristics discovered by property, 20-byte writes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialConfig {
+    /// GATT service UUID carrying the serial stream (128-bit).
+    pub service_uuid: u128,
+    /// Optional explicit write-characteristic UUID; when `None` it is discovered by property.
+    pub write_uuid: Option<u128>,
+    /// Optional explicit notify-characteristic UUID; when `None` it is discovered by property.
+    pub notify_uuid: Option<u128>,
+    /// Maximum payload bytes per GATT write.
+    pub max_write: usize,
+}
+
+impl Default for SerialConfig {
+    fn default() -> Self {
+        Self {
+            service_uuid: DEFAULT_SERVICE_UUID,
+            write_uuid: None,
+            notify_uuid: None,
+            max_write: DEFAULT_MAX_WRITE,
+        }
+    }
+}
+
+/// Whether `services` includes the serial service `serial`.
+#[must_use]
+pub fn advertises(services: &[u128], serial: u128) -> bool {
+    services.contains(&serial)
+}
+
+/// Apply `filter`, mark the serial-service carriers, and order the survivors serial-service first,
+/// then strongest signal. This is the platform-independent core of a scan: the `WinRT` watcher
+/// collects a [`Seen`] per address and hands them here, so the filtering, flagging and ordering are
+/// testable without a radio.
+#[must_use]
+pub fn rank_advertisers(
+    seen: impl IntoIterator<Item = Seen>,
+    filter: &ScanFilter,
+    serial: u128,
+) -> Vec<Advert> {
+    let mut rows: Vec<Advert> = seen
+        .into_iter()
+        .filter(|s| filter.matches(&s.name, s.addr))
+        .map(|s| {
+            let has_serial_service = advertises(&s.services, serial);
+            Advert {
+                address: s.addr,
+                name: s.name,
+                rssi: s.rssi,
+                services: s.services,
+                has_serial_service,
+            }
+        })
+        .collect();
+    // Serial-service advertisers first, then strongest signal.
+    rows.sort_by(|a, b| {
+        b.has_serial_service
+            .cmp(&a.has_serial_service)
+            .then(b.rssi.cmp(&a.rssi))
+    });
+    rows
+}
+
+/// One display row for a ranked advertiser, marking the one that carries the serial service.
+#[must_use]
+pub fn doctor_row(advert: &Advert, serial: u128) -> String {
+    let name = if advert.name.is_empty() {
+        "<unnamed>"
+    } else {
+        advert.name.as_str()
+    };
+    let services = if advert.services.is_empty() {
+        "-".to_owned()
+    } else {
+        advert
+            .services
+            .iter()
+            .map(|u| uuid_label(*u))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mark = if advert.has_serial_service {
+        format!("  <- serial service ({})", uuid_label(serial))
+    } else {
+        String::new()
+    };
+    format!(
+        "{}  {:>5} dBm  {name}  [{services}]{mark}",
+        format_addr(advert.address),
+        advert.rssi
+    )
 }
 
 /// Host and port an Android emulator's Wi-Fi OBD client should dial to reach `bound`.
@@ -199,7 +408,37 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
+/// Consume a leading `scan`/`doctor` subcommand, if present, and return the resulting mode.
+fn take_mode<I: Iterator<Item = String>>(it: &mut std::iter::Peekable<I>) -> Mode {
+    if matches!(it.peek().map(String::as_str), Some("scan" | "doctor")) {
+        it.next();
+        Mode::Doctor
+    } else {
+        Mode::Bridge
+    }
+}
+
 impl Config {
+    /// The GATT serial parameters this configuration implies, for [`crate::ble::connect`].
+    #[must_use]
+    pub fn serial(&self) -> SerialConfig {
+        SerialConfig {
+            service_uuid: self.service_uuid,
+            write_uuid: self.write_uuid,
+            notify_uuid: self.notify_uuid,
+            max_write: self.max_write,
+        }
+    }
+
+    /// The name/address filter this configuration implies, for [`crate::ble::scan_advertisers`].
+    #[must_use]
+    pub fn scan_filter(&self) -> ScanFilter {
+        ScanFilter {
+            name_contains: self.name_filter.clone(),
+            address: self.mac_filter,
+        }
+    }
+
     /// Build a [`Config`] from process arguments and environment variables.
     ///
     /// Returns `Ok(None)` when `--help` was requested (the caller should print [`USAGE`] and exit 0).
@@ -222,7 +461,8 @@ impl Config {
         let mut capture = env("OBD_BRIDGE_CAPTURE");
         let mut capture_format = env("OBD_BRIDGE_CAPTURE_FORMAT");
 
-        let mut it = args.into_iter();
+        let mut it = args.into_iter().peekable();
+        let mode = take_mode(&mut it);
         while let Some(arg) = it.next() {
             let mut take = |flag: &str| -> Result<String, ConfigError> {
                 it.next()
@@ -301,6 +541,7 @@ impl Config {
         });
 
         Ok(Some(Config {
+            mode,
             listen,
             name_filter,
             mac_filter,
@@ -400,6 +641,148 @@ mod tests {
     fn help_returns_none() {
         let args = ["--help"].into_iter().map(String::from);
         assert!(Config::from_args_and_env(args).unwrap().is_none());
+    }
+
+    #[test]
+    fn scan_subcommand_sets_doctor_mode() {
+        for verb in ["scan", "doctor"] {
+            let args = [verb, "--name", "OBDLink"].into_iter().map(String::from);
+            let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+            assert_eq!(cfg.mode, Mode::Doctor);
+            assert_eq!(cfg.name_filter.as_deref(), Some("OBDLink"));
+        }
+        let plain = ["--name", "OBDLink"].into_iter().map(String::from);
+        assert_eq!(
+            Config::from_args_and_env(plain).unwrap().unwrap().mode,
+            Mode::Bridge
+        );
+    }
+
+    #[test]
+    fn format_addr_is_colon_hex() {
+        assert_eq!(format_addr(0x0000_AABB_CCDD_EEFF), "AA:BB:CC:DD:EE:FF");
+    }
+
+    #[test]
+    fn uuid_label_shortens_base_uuids_only() {
+        assert_eq!(uuid_label(DEFAULT_SERVICE_UUID), "FFF0");
+        assert_eq!(uuid_label(short_uuid(0x180A)), "180A");
+        let full = 0x1234_5678_9abc_def0_1122_3344_5566_7788_u128;
+        assert_eq!(uuid_label(full), "12345678-9abc-def0-1122-334455667788");
+    }
+
+    #[test]
+    fn doctor_row_marks_the_serial_service() {
+        let serial = DEFAULT_SERVICE_UUID;
+        let with = Advert {
+            address: 0x0000_AABB_CCDD_EEFF,
+            name: "OBDLink MX".to_owned(),
+            rssi: -63,
+            services: vec![serial, short_uuid(0x180A)],
+            has_serial_service: true,
+        };
+        let row = doctor_row(&with, serial);
+        assert!(row.contains("AA:BB:CC:DD:EE:FF"), "{row}");
+        assert!(row.contains("-63 dBm"), "{row}");
+        assert!(row.contains("OBDLink MX"), "{row}");
+        assert!(row.contains("FFF0"), "{row}");
+        assert!(row.contains("<- serial service (FFF0)"), "{row}");
+
+        let without = Advert {
+            address: 0x0000_1122_3344_5566,
+            name: String::new(),
+            rssi: -90,
+            services: vec![short_uuid(0x180A)],
+            has_serial_service: false,
+        };
+        let row = doctor_row(&without, serial);
+        assert!(row.contains("<unnamed>"), "{row}");
+        assert!(!row.contains("<- serial service"), "{row}");
+        assert!(advertises(&with.services, serial));
+        assert!(!advertises(&without.services, serial));
+    }
+
+    #[test]
+    fn rank_advertisers_filters_flags_and_orders() {
+        let serial = DEFAULT_SERVICE_UUID;
+        let seen = [
+            Seen {
+                addr: 0x0000_0000_0000_0001,
+                name: "Weak serial".to_owned(),
+                rssi: -80,
+                services: vec![serial],
+            },
+            Seen {
+                addr: 0x0000_0000_0000_0002,
+                name: "Strong other".to_owned(),
+                rssi: -40,
+                services: vec![short_uuid(0x180A)],
+            },
+            Seen {
+                addr: 0x0000_0000_0000_0003,
+                name: "Strong serial".to_owned(),
+                rssi: -55,
+                services: vec![serial],
+            },
+            Seen {
+                addr: 0x0000_0000_0000_0004,
+                name: "Skipme".to_owned(),
+                rssi: -30,
+                services: vec![serial],
+            },
+        ];
+
+        // No filter: serial-service carriers first, strongest within each group.
+        let ranked = rank_advertisers(seen.iter().cloned(), &ScanFilter::default(), serial);
+        let order: Vec<u64> = ranked.iter().map(|a| a.address).collect();
+        assert_eq!(order, vec![4, 3, 1, 2]);
+        assert!(ranked[0].has_serial_service);
+        assert!(!ranked[3].has_serial_service);
+
+        // Name filter is a case-insensitive substring.
+        let filter = ScanFilter {
+            name_contains: Some("serial".to_owned()),
+            address: None,
+        };
+        let ranked = rank_advertisers(seen.iter().cloned(), &filter, serial);
+        let order: Vec<u64> = ranked.iter().map(|a| a.address).collect();
+        assert_eq!(order, vec![3, 1]);
+
+        // Address filter keeps exactly one.
+        let filter = ScanFilter {
+            name_contains: None,
+            address: Some(2),
+        };
+        let ranked = rank_advertisers(seen.iter().cloned(), &filter, serial);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].address, 2);
+        assert!(!ranked[0].has_serial_service);
+    }
+
+    #[test]
+    fn config_derives_serial_and_scan_filter() {
+        let args = [
+            "--name",
+            "OBDLink",
+            "--mac",
+            "AA:BB:CC:DD:EE:FF",
+            "--mtu",
+            "40",
+        ]
+        .into_iter()
+        .map(String::from);
+        let cfg = Config::from_args_and_env(args).unwrap().unwrap();
+
+        let serial = cfg.serial();
+        assert_eq!(serial.service_uuid, DEFAULT_SERVICE_UUID);
+        assert_eq!(serial.max_write, 40);
+        assert_eq!(serial.write_uuid, None);
+
+        let filter = cfg.scan_filter();
+        assert_eq!(filter.name_contains.as_deref(), Some("OBDLink"));
+        assert_eq!(filter.address, Some(0x0000_AABB_CCDD_EEFF));
+        assert!(filter.matches("my obdlink mx", 0x0000_AABB_CCDD_EEFF));
+        assert!(!filter.matches("other", 0x0000_AABB_CCDD_EEFF));
     }
 
     #[test]

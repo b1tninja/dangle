@@ -50,7 +50,7 @@ The default bind in this crate is `127.0.0.1:35000` (`DEFAULT_LISTEN`). No test 
 | [ok] | A client disconnect is success, and the same link serves the next client | `README.md` | `bridge::tests::client_disconnect_is_ok_and_link_serves_next_client` |
 | [ok] | A failed link write ends the session with that error | `src/bridge.rs` | `bridge::tests::failing_link_write_makes_run_err` |
 | [open] | After a failed link write, the process drops the adapter and scans again | `src/main.rs` outer loop | none: the loop is not under test |
-| [open] | Scan, connect, subscribe, and notify against a real BLE adapter | `README.md`; `src/ble.rs` | none: needs Windows and a dongle |
+| [open] | Scan, connect, subscribe, and notify against a real BLE adapter | `README.md`; `src/ble/win.rs` | none: needs Windows and a dongle |
 | [open] | On a build without Windows, `run` returns the WinRT requirement and `--help` still prints | `src/main.rs` | none: not under test |
 
 ## Emulator dial address
@@ -71,7 +71,35 @@ The bridge binds a host address. The standard Android emulator reaches the host'
 | [ok] | A Bluetooth address is 12 hex digits, with colons or dashes optional | `src/config.rs` `parse_mac` | `config::tests::parse_mac_handles_separators` |
 | [ok] | `--listen`, `--name`, and `--mtu` override those fields, and an omitted `--service` stays `FFF0` | `src/config.rs` | `config::tests::args_override_defaults` |
 | [ok] | `--help` returns no config, and an unknown flag is an error | `src/config.rs` | `config::tests::help_returns_none`; `config::tests::unknown_flag_errors` |
-| [open] | The live scan applies `--name` and `--mac` to an advertisement | `src/ble.rs` `scan_for_adapter` | none: needs a dongle |
+| [open] | The live scan applies `--name` and `--mac` to an advertisement | `src/ble/win.rs` `scan_for_adapter` | none: needs a dongle |
+
+## Pre-flight scan (doctor)
+
+The `scan` subcommand (alias `doctor`) is a read-only check an operator runs before a capture: it
+lists the host adapter and the BLE advertisers the radio sees, marking the one that carries the
+serial service, then exits. It opens no GATT connection and binds no socket.
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [ok] | The `scan` (alias `doctor`) subcommand selects the doctor mode; without it the bridge runs | `src/config.rs` `from_args_and_env`, `Mode` | `config::tests::scan_subcommand_sets_doctor_mode` |
+| [ok] | A seen advertiser renders as address, signal, name and services, marking the one that advertises the serial service; a UUID on the Bluetooth base shows in its short form | `src/config.rs` `doctor_row`, `uuid_label`, `format_addr` | `config::tests::doctor_row_marks_the_serial_service`; `config::tests::uuid_label_shortens_base_uuids_only`; `config::tests::format_addr_is_colon_hex` |
+| [ok] | A `WinRT` GUID round-trips to its 128-bit UUID | `src/ble/win.rs` `guid_to_u128` | `ble::win::tests::guid_to_u128_inverts_from_u128` |
+| [ok] | Collected advertisers are filtered by name/address, flagged for the serial service, and ordered serial-service first then strongest signal | `src/config.rs` `rank_advertisers`, `ScanFilter` | `config::tests::rank_advertisers_filters_flags_and_orders` |
+| [open] | The live `scan` reports the host adapter and lists nearby BLE advertisers over the radio | `src/ble/win.rs` `doctor`, `scan_advertisers` | none: needs a dongle |
+
+## Library API
+
+The crate is a library (`[lib] obd_bridge`) plus a thin binary built on it, so a sibling crate
+(e.g. `voltkit`) can do host-OS BLE in-process rather than spawning the binary. `src/lib.rs`
+re-exports `scan_advertisers`, `connect`, `BleSerial`, `SerialLink`, the config types/helpers, and
+`BridgeResult`. The live BLE items are `#[cfg(windows)]`; a non-Windows build gets a compiling stub.
+
+| Status | Obligation | Anchor | Test |
+|---|---|---|---|
+| [ok] | `scan_advertisers` returns typed `Advert` rows (address, name, rssi, service UUIDs, serial flag), serial-service first then strongest, as data not stdout; the binary's `scan` just formats them | `src/ble/win.rs` `scan_advertisers`; `src/config.rs` `rank_advertisers` | `config::tests::rank_advertisers_filters_flags_and_orders` |
+| [ok] | `Config` yields a `SerialConfig` (service/char/MTU) for `connect` and a `ScanFilter` (name/address) for `scan_advertisers` | `src/config.rs` `Config::serial`, `Config::scan_filter` | `config::tests::config_derives_serial_and_scan_filter` |
+| [open] | `connect(address, &SerialConfig)` opens the serial service, subscribes, and exposes byte read/write against a real adapter | `src/ble/win.rs` `connect`, `BleSerial` | none: needs Windows and a dongle |
+| [open] | On a non-Windows build the library items compile and return the WinRT requirement; `BleSerial` is uninhabited | `src/ble/unsupported.rs` | none: not cross-built here |
 
 ## Left unbuilt
 
